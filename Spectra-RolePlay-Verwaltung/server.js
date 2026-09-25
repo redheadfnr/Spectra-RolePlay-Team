@@ -130,5 +130,8 @@ app.post('/api/vehicles',auth,roles('ADMIN','PROJEKTLEITUNG'),(req,res)=>{const 
 app.delete('/api/vehicles/:id',auth,roles('ADMIN','PROJEKTLEITUNG'),(req,res)=>{if(db.organizationVehicles.some(x=>x.vehicleId===req.params.id)||db.requests.some(x=>x.vehicleId===req.params.id&&!['ABGELEHNT'].includes(x.status)))return res.status(409).json({error:'Fahrzeug wird noch verwendet'});const i=db.vehicles.findIndex(x=>x.id===req.params.id);if(i<0)return res.status(404).json({error:'Fahrzeug nicht gefunden'});const [v]=db.vehicles.splice(i,1);audit(db,req.user,'VEHICLE_DELETED',v.name);saveDB(db);res.json({ok:true});});
 app.post('/api/reset-demo',auth,roles('PROJEKTLEITUNG'),(req,res)=>{db.requests=[];db.organizationVehicles=[];db.audit=[];saveDB(db);res.json({ok:true});});
 
-app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
-app.listen(PORT,()=>console.log(`Spectra Verwaltung läuft auf http://localhost:${PORT}`));
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+module.exports = app;
