@@ -7,6 +7,8 @@ const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+console.log('Spectra server starting...');
+
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const DB_FILE = path.join(__dirname, 'data', 'db.json');
