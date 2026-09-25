@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spectra RolePlay Verwaltung</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="toast"></div>
+<section id="loginView" class="login-screen"><div class="login-card"><div class="brand"><div class="logo">✦</div><div><b>SPECTRA</b><span>ROLEPLAY VERWALTUNG</span></div></div><h1>Willkommen zurück</h1><p class="muted">Melde dich an, um das interne Verwaltungsportal zu öffnen.</p><form id="loginForm"><label>Benutzername<input id="loginUser" autocomplete="username" required></label><label>Passwort<input id="loginPass" type="password" autocomplete="current-password" required></label><button class="primary wide">Anmelden</button></form><div class="login-hint">Zugriff nur für autorisierte Teammitglieder.</div></div></section>
+<section id="appView" class="app hidden"><aside class="sidebar"><div class="brand sidebrand"><div class="logo">✦</div><div><b>SPECTRA</b><span>VERWALTUNG</span></div></div><div id="userBadge" class="user-badge"></div><nav id="nav"><button data-page="dashboard" class="active">⌂ <span>Dashboard</span></button><button data-page="requests">▣ <span>Fahrzeuganträge</span></button><button data-page="fleet">🚘 <span>Flotten</span></button><button data-page="vehicles">◈ <span>Fahrzeuge</span></button><button data-page="rules">⚖ <span>Bann-Richtlinien</span></button><button data-page="jail">⏱ <span>Admin-Jail</span></button><button data-page="organizations">◉ <span>Organisationen</span></button><button data-page="users" class="staffOnly">♙ <span>Benutzer</span></button><button data-page="audit" class="staffOnly">☷ <span>Audit-Log</span></button></nav><button id="logoutBtn" class="logout">↪ Abmelden</button></aside><main class="main"><header class="topbar"><div><div class="eyebrow">SPECTRA ROLEPLAY</div><h2 id="pageTitle">Dashboard</h2></div><div id="rolePill" class="pill"></div></header><div id="content"></div></main></section>
+<div id="modal" class="modal hidden"><div class="modal-box"><button id="modalClose" class="modal-close">×</button><div id="modalContent"></div></div></div>
+<script src="/app.js"></script>
+</body></html>

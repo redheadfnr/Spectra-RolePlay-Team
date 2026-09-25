@@ -1,0 +1,40 @@
+{
+  "organizations": [
+    {"id":"org_lspd","name":"LSPD"},
+    {"id":"org_fib","name":"FIB"},
+    {"id":"org_gov","name":"GOV"},
+    {"id":"org_medic","name":"MEDIC"},
+    {"id":"org_mechanic","name":"MECHANIC"}
+  ],
+  "vehicles": [
+    {"id":"veh_001","name":"Mercedes-AMG GT 63 S","category":"Sportlimousine","image":""},
+    {"id":"veh_002","name":"BMW M5 Competition","category":"Sportlimousine","image":""},
+    {"id":"veh_003","name":"Audi RS6 Avant","category":"Kombi","image":""},
+    {"id":"veh_004","name":"Dodge Charger","category":"Limousine","image":""},
+    {"id":"veh_005","name":"Ford Mustang GT","category":"Sportwagen","image":""},
+    {"id":"veh_006","name":"Lamborghini Huracán","category":"Supercar","image":""},
+    {"id":"veh_007","name":"Porsche 911","category":"Sportwagen","image":""},
+    {"id":"veh_008","name":"Range Rover","category":"SUV","image":""},
+    {"id":"veh_009","name":"Mercedes Sprinter","category":"Van","image":""},
+    {"id":"veh_010","name":"BMW X5","category":"SUV","image":""},
+    {"id":"veh_011","name":"Audi Q8","category":"SUV","image":""},
+    {"id":"veh_012","name":"Toyota Supra","category":"Sportwagen","image":""}
+  ],
+  "users": [],
+  "organizationVehicles": [],
+  "requests": [],
+  "rules": [],
+  "adminJailRules": [
+    {"id":"j1","name":"FailRP","minutes":45},
+    {"id":"j2","name":"RP Flucht","minutes":120},
+    {"id":"j3","name":"Unnötiges Tazern","minutes":20},
+    {"id":"j4","name":"Job-Abused","minutes":60},
+    {"id":"j5","name":"Unnötiges Beleidigen","minutes":30},
+    {"id":"j6","name":"NewLife Regel","minutes":60},
+    {"id":"j7","name":"Drittpartei","minutes":120},
+    {"id":"j8","name":"Leichen durchsuchen","minutes":60},
+    {"id":"j9","name":"Missachten einer Safezone","minutes":45}
+  ],
+  "audit": [],
+  "sessions": []
+}
