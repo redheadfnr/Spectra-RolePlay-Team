@@ -43,7 +43,7 @@ function seedUsers(db){
   }
   if(changed) saveDB(db);
 }
-let db=loadDB(); seedUsers(db); db=loadDB();
+let db = loadDB();
 
 function auth(req,res,next){
   const token=(req.headers.authorization||'').replace(/^Bearer\s+/i,'');
