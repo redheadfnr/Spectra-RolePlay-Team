@@ -74,6 +74,34 @@ async function uploadImage(file) {
 
   formData.append('image', file);
 
+  const response = await fetch('/api/upload-image', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + state.token
+    },
+    body: formData
+  });
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      result.error || 'Bild konnte nicht hochgeladen werden'
+    );
+  }
+
+  if (!result.url) {
+    throw new Error(
+      'Upload erfolgreich, aber keine Bild-URL erhalten'
+    );
+  }
+
+  return result.url;
+}
+  const formData = new FormData();
+
+  formData.append('image', file);
+
   const result = await api('/api/upload-image', {
     method: 'POST',
     body: formData
