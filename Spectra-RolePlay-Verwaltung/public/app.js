@@ -1,16 +1,20 @@
 const $ = s => document.querySelector(s);
 
 const state = {
+  token: localStorage.getItem('spectra_token'),
   token: localStorage.getItem('spectra_token') || '',
-  user: null,
+user: null,
+  organizations: [],
   dashboard: null,
   requests: [],
-  vehicles: [],
+vehicles: [],
+  page: 'dashboard'
   organizations: [],
   users: [],
   audit: []
 };
 
+const $ = s => document.querySelector(s);
 const pageTitles = {
   dashboard: 'Dashboard',
   requests: 'Fahrzeuganträge',
@@ -26,6 +30,14 @@ const pageTitles = {
 function toast(message, error = false) {
   const el = $('#toast');
 
+const esc = s =>
+  String(s ?? '').replace(/[&<>'"]/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;'
+  }[c]));
   el.textContent = message;
   el.className = error ? 'show error' : 'show';
 
@@ -37,71 +49,45 @@ function toast(message, error = false) {
 }
 
 async function api(url, opts = {}) {
-  opts.headers = {
-    ...(opts.headers || {}),
+opts.headers = {
+...(opts.headers || {}),
+    ...(state.token ? { Authorization: 'Bearer ' + state.token } : {})
     ...(state.token
       ? { Authorization: 'Bearer ' + state.token }
       : {})
-  };
+};
 
+  if (opts.body && typeof opts.body !== 'string') {
   if (
     opts.body &&
     typeof opts.body !== 'string' &&
     !(opts.body instanceof FormData)
   ) {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(opts.body);
-  }
-
-  const r = await fetch(url, opts);
-
-  const d = await r.json().catch(() => ({}));
-
-  if (r.status === 401) {
-    logout(false);
-    throw new Error(d.error || 'Nicht angemeldet');
-  }
-
-  if (!r.ok) {
-    throw new Error(d.error || 'Fehler');
-  }
-
-  return d;
+opts.headers['Content-Type'] = 'application/json';
+opts.body = JSON.stringify(opts.body);
 }
 
+const r = await fetch(url, opts);
+
+const d = await r.json().catch(() => ({}));
+
+if (r.status === 401) {
+@@ -43,623 +69,415 @@ async function api(url, opts = {}) {
+return d;
+}
+
+function toast(msg, bad = false) {
+  const t = $('#toast');
 async function uploadImage(file) {
   const formData = new FormData();
 
+  t.textContent = msg;
+  t.className = 'toast ' + (bad ? 'bad' : '');
   formData.append('image', file);
 
-  const response = await fetch('/api/upload-image', {
-    method: 'POST',
-    headers: {
-      Authorization: 'Bearer ' + state.token
-    },
-    body: formData
-  });
-
-  const result = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(
-      result.error || 'Bild konnte nicht hochgeladen werden'
-    );
-  }
-
-  if (!result.url) {
-    throw new Error(
-      'Upload erfolgreich, aber keine Bild-URL erhalten'
-    );
-  }
-
-  return result.url;
-}
-  const formData = new FormData();
-
-  formData.append('image', file);
-
+  setTimeout(() => {
+    t.className = '';
+  }, 3000);
   const result = await api('/api/upload-image', {
     method: 'POST',
     body: formData
@@ -110,20 +96,25 @@ async function uploadImage(file) {
   return result.url;
 }
 
+function logout(show = true) {
 function logout(showToast = true) {
-  localStorage.removeItem('spectra_token');
+localStorage.removeItem('spectra_token');
 
+  state.token = null;
   state.token = '';
-  state.user = null;
+state.user = null;
 
-  $('#appView').classList.add('hidden');
-  $('#loginView').classList.remove('hidden');
+$('#appView').classList.add('hidden');
+$('#loginView').classList.remove('hidden');
 
+  if (show) {
   if (showToast) {
-    toast('Abgemeldet');
-  }
+toast('Abgemeldet');
+}
 }
 
+async function init() {
+  if (!state.token) return;
 async function login(username, password) {
   const result = await api('/api/login', {
     method: 'POST',
@@ -133,29 +124,60 @@ async function login(username, password) {
     }
   });
 
+  try {
+    const d = await api('/api/me');
   state.token = result.token;
   state.user = result.user;
 
+    state.user = d.user;
   localStorage.setItem('spectra_token', state.token);
 
+    await loadBase();
   $('#loginView').classList.add('hidden');
   $('#appView').classList.remove('hidden');
 
+    showApp();
+    renderPage('dashboard');
   updateUserUI();
 
+  } catch {
+    logout(false);
+  }
+}
   await loadBase();
 
+async function loadBase() {
+  state.organizations = await api('/api/organizations');
+  state.vehicles = await api('/api/vehicles');
   renderPage('dashboard');
 }
 
+function showApp() {
+  $('#loginView').classList.add('hidden');
+  $('#appView').classList.remove('hidden');
 function updateUserUI() {
   if (!state.user) return;
 
-  $('#userBadge').innerHTML = `
+$('#userBadge').innerHTML = `
+    <strong>${esc(state.user.username)}</strong>
+    <span>
+      ${esc(state.user.role)}
+      ${
+        state.user.organizationId
+          ? ' · ' +
+            esc(
+              state.organizations.find(
+                o => o.id === state.user.organizationId
+              )?.name || ''
+            )
+          : ''
+      }
+    </span>
     <strong>${escapeHtml(state.user.username)}</strong>
     <span>${escapeHtml(state.user.role)}</span>
-  `;
+ `;
 
+  $('#rolePill').textContent = state.user.role;
   $('#rolePill').textContent =
     state.user.organization_id
       ? `${state.user.role} · ${state.user.organization_id}`
@@ -166,8 +188,13 @@ function updateUserUI() {
       state.user.role === 'ADMIN' ||
       state.user.role === 'PROJEKTLEITUNG';
 
+  document.querySelectorAll('.staffOnly').forEach(x => {
+    x.style.display =
+      ['ADMIN', 'PROJEKTLEITUNG'].includes(state.user.role)
+        ? 'block'
+        : 'none';
     el.style.display = allowed ? '' : 'none';
-  });
+});
 }
 
 async function loadBase() {
@@ -213,10 +240,15 @@ function escapeHtml(value) {
 }
 
 function renderPage(page) {
+  state.page = page;
   $('#pageTitle').textContent =
     pageTitles[page] || page;
 
-  document
+document
+    .querySelectorAll('#nav button')
+    .forEach(b =>
+      b.classList.toggle('active', b.dataset.page === page)
+    );
     .querySelectorAll('#nav button[data-page]')
     .forEach(btn => {
       btn.classList.toggle(
@@ -225,6 +257,17 @@ function renderPage(page) {
       );
     });
 
+  const titles = {
+    dashboard: 'Dashboard',
+    requests: 'Fahrzeuganträge',
+    fleet: 'Flotten',
+    vehicles: 'Fahrzeugkatalog',
+    rules: 'Bann-Richtlinien',
+    jail: 'Admin-Jail',
+    organizations: 'Organisationen',
+    users: 'Benutzer',
+    audit: 'Audit-Log'
+  };
   const content = $('#content');
 
   if (page === 'dashboard') {
@@ -252,6 +295,19 @@ function renderPage(page) {
     return;
   }
 
+  $('#pageTitle').textContent = titles[page] || page;
+
+  ({
+    dashboard: renderDashboard,
+    requests: renderRequests,
+    fleet: renderFleet,
+    vehicles: renderVehicles,
+    rules: renderRules,
+    jail: renderJail,
+    organizations: renderOrganizations,
+    users: renderUsers,
+    audit: renderAudit
+  }[page] || renderDashboard)();
   if (page === 'jail') {
     renderJail();
     return;
@@ -279,42 +335,143 @@ function renderPage(page) {
   `;
 }
 
+async function renderDashboard() {
+  const d = await api('/api/dashboard');
 function renderDashboard() {
   const d = state.dashboard || {};
 
-  $('#content').innerHTML = `
+$('#content').innerHTML = `
+    <div class="grid stats">
+      <div class="card stat">
+        <small>Fahrzeuganträge</small>
+        <strong>${d.stats.requests}</strong>
     <div class="stats">
       <div class="stat">
         <span>Benutzer</span>
         <strong>${d.users ?? state.users.length}</strong>
-      </div>
+     </div>
 
+      <div class="card stat">
+        <small>Offen</small>
+        <strong>${d.stats.pending}</strong>
       <div class="stat">
         <span>Fahrzeuge</span>
         <strong>${d.vehicles ?? state.vehicles.length}</strong>
-      </div>
+     </div>
 
+      <div class="card stat">
+        <small>Genehmigt</small>
+        <strong>${d.stats.approved}</strong>
       <div class="stat">
         <span>Anträge</span>
         <strong>${d.requests ?? state.requests.length}</strong>
-      </div>
+     </div>
 
+      <div class="card stat">
+        <small>Flottenfahrzeuge</small>
+        <strong>${d.stats.fleet}</strong>
       <div class="stat">
         <span>Organisationen</span>
         <strong>${d.organizations ?? state.organizations.length}</strong>
-      </div>
+     </div>
+   </div>
+
+    <div class="section-head">
+      <h3>Letzte Anträge</h3>
+      <button class="smallbtn" onclick="renderPage('requests')">
+        Alle anzeigen
+      </button>
     </div>
 
+    <div class="card table-wrap">
+      ${requestTable(d.recent || [], false)}
     <div class="card">
       <h3>Willkommen zurück</h3>
       <p class="muted">
         Angemeldet als
         <strong>${escapeHtml(state.user?.username)}</strong>.
       </p>
-    </div>
-  `;
+   </div>
+ `;
 }
 
+function requestTable(rows, actions = true) {
+  if (!rows.length) {
+    return '<div class="empty">Noch keine Anträge vorhanden.</div>';
+  }
+
+  return `
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Antragsteller</th>
+          <th>Organisation</th>
+          <th>Fahrzeug</th>
+          <th>Datum</th>
+          <th>Status</th>
+          ${actions ? '<th>Aktion</th>' : ''}
+        </tr>
+      </thead>
+
+      <tbody>
+        ${rows
+          .map(
+            r => `
+              <tr>
+                <td>${esc(r.applicant)}</td>
+
+                <td>
+                  ${esc(
+                    r.organizationName ||
+                      orgName(r.organizationId)
+                  )}
+                </td>
+
+                <td>
+                  ${esc(
+                    r.vehicleName ||
+                      vehicleName(r.vehicleId)
+                  )}
+                </td>
+
+                <td>${esc(r.date || '')}</td>
+
+                <td>
+                  <span class="status ${r.status}">
+                    ${statusText(r.status)}
+                  </span>
+                </td>
+
+                ${
+                  actions
+                    ? `
+                      <td class="actions">
+                        ${
+                          ['ADMIN', 'PROJEKTLEITUNG'].includes(
+                            state.user.role
+                          )
+                            ? `
+                              <button
+                                class="smallbtn ok"
+                                onclick="reviewRequest('${r.id}','GENEHMIGT')"
+                              >
+                                Genehmigen
+                              </button>
+
+                              <button
+                                class="smallbtn danger"
+                                onclick="reviewRequest('${r.id}','ABGELEHNT')"
+                              >
+                                Ablehnen
+                              </button>
+                            `
+                            : '—'
+                        }
+                      </td>
+                    `
+                    : ''
+                }
+              </tr>
 function renderRequests() {
   const canReview =
     state.user?.role === 'ADMIN' ||
@@ -344,14 +501,67 @@ function renderRequests() {
               >
                 Ablehnen
               </button>
-            `
+           `
+          )
+          .join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function statusText(s) {
+  return (
+    {
+      BEANTRAGT: 'Beantragt',
+      IN_PRUEFUNG: 'In Prüfung',
+      GENEHMIGT: 'Genehmigt',
+      ABGELEHNT: 'Abgelehnt'
+    }[s] || s
+  );
+}
+
+function orgName(id) {
+  return (
+    state.organizations.find(o => o.id === id)?.name ||
+    'Unbekannt'
+  );
+}
+
+function vehicleName(id) {
+  return (
+    state.vehicles.find(v => v.id === id)?.name ||
+    'Unbekannt'
+  );
+}
+
+async function renderRequests() {
+  const rows = await api('/api/requests');
+
+  const leader = state.user.role === 'LEADER';
             : ''
         }
       </td>
     </tr>
   `).join('');
 
-  $('#content').innerHTML = `
+$('#content').innerHTML = `
+    <div class="section-head">
+      <h3>Verwaltung</h3>
+
+      ${
+        leader ||
+        ['ADMIN', 'PROJEKTLEITUNG'].includes(state.user.role)
+          ? `
+            <button
+              class="primary"
+              onclick="openRequestModal()"
+            >
+              + Neuer Antrag
+            </button>
+          `
+          : ''
+      }
+    </div>
     <div class="card">
       <div class="card-head">
         <div>
@@ -362,6 +572,8 @@ function renderRequests() {
         </div>
       </div>
 
+    <div class="card table-wrap">
+      ${requestTable(rows, true)}
       <div class="table-wrap">
         <table>
           <thead>
@@ -389,40 +601,225 @@ function renderRequests() {
           </tbody>
         </table>
       </div>
-    </div>
-  `;
+   </div>
+ `;
 }
 
 async function reviewRequest(id, status) {
-  try {
+try {
+    await api('/api/requests/' + id, {
     await api(`/api/requests/${id}`, {
-      method: 'PATCH',
-      body: { status }
-    });
+method: 'PATCH',
+body: { status }
+});
 
     await loadBase();
 
     renderPage('requests');
 
-    toast(
+toast(
+      status === 'GENEHMIGT'
       status === 'APPROVED'
-        ? 'Antrag genehmigt'
-        : 'Antrag abgelehnt'
-    );
+? 'Antrag genehmigt'
+: 'Antrag abgelehnt'
+);
+
+    await loadBase();
+
+    renderPage(state.page);
+
+  } catch (e) {
+    toast(e.message, true);
   } catch (err) {
     toast(err.message, true);
-  }
+}
 }
 
+function openRequestModal() {
+  const orgs =
+    state.user.role === 'LEADER'
+      ? state.organizations.filter(
+          o => o.id === state.user.organizationId
+        )
+      : state.organizations;
+
+  $('#modalContent').innerHTML = `
+    <h3>Fahrzeugantrag erstellen</h3>
+
+    <form id="reqForm">
+
+      <div class="form-grid">
+
+        <label>
+          Antragsteller
+          <input name="applicant" required>
+        </label>
+
+        <label>
+          Datum
+          <input
+            name="date"
+            type="date"
+            value="${new Date()
+              .toISOString()
+              .slice(0, 10)}"
+          >
+        </label>
+
+        <label>
+          Organisation
+          <select name="organizationId">
+            ${orgs
+              .map(
+                o =>
+                  `<option value="${o.id}">
+                    ${esc(o.name)}
+                  </option>`
+              )
+              .join('')}
+          </select>
+        </label>
+
+        <label>
+          Fahrzeug
+          <select name="vehicleId">
+            ${state.vehicles
+              .map(
+                v =>
+                  `<option value="${v.id}">
+                    ${esc(v.name)} · ${esc(v.category)}
+                  </option>`
+              )
+              .join('')}
+          </select>
+        </label>
 function renderVehicles() {
   const canManage =
     state.user?.role === 'ADMIN' ||
     state.user?.role === 'PROJEKTLEITUNG';
 
+      </div>
+
+      <label>
+        Bild-URL
+        <input
+          name="imageUrl"
+          type="url"
+          placeholder="https://..."
+        >
+      </label>
+
+      <label>
+        Kommentar
+        <textarea
+          name="comment"
+          rows="3"
+        ></textarea>
+      </label>
+
+      <div class="btnrow">
+        <button
+          type="button"
+          class="smallbtn"
+          onclick="closeModal()"
+        >
+          Abbrechen
+        </button>
+
+        <button class="primary">
+          Antrag senden
+        </button>
+      </div>
+
+    </form>
+  `;
+
+  $('#reqForm').onsubmit = async e => {
+    e.preventDefault();
+
+    try {
+      const data = Object.fromEntries(
+        new FormData(e.target)
+      );
+
+      await api('/api/requests', {
+        method: 'POST',
+        body: data
+      });
+
+      closeModal();
+
+      toast('Antrag erstellt');
+
+      renderPage('requests');
+
+    } catch (err) {
+      toast(err.message, true);
+    }
+  };
+
+  $('#modal').classList.remove('hidden');
+}
+
+async function renderFleet() {
+  const rows = await api('/api/fleet');
+
+  $('#content').innerHTML = `
+    <div class="section-head">
+      <h3>Aktuelle Flotten</h3>
+
+      <span class="muted">
+        Genehmigte Anträge werden automatisch hinzugefügt.
+      </span>
+    </div>
+
+    <div class="grid cards">
   const cards = state.vehicles.map(v => `
     <div class="vehicle-card">
 
-      ${
+     ${
+        rows.length
+          ? rows
+              .map(
+                x => `
+                  <div class="card vehicle-card">
+
+                    <div class="vehicle-image">
+                      ${
+                        x.vehicle?.image
+                          ? `
+                            <img
+                              src="${esc(x.vehicle.image)}"
+                              style="
+                                width:100%;
+                                height:100%;
+                                object-fit:cover;
+                              "
+                              onerror="this.style.display='none'"
+                            >
+                          `
+                          : '🚘'
+                      }
+                    </div>
+
+                    <div class="body">
+
+                      <h4>
+                        ${esc(x.vehicle?.name)}
+                      </h4>
+
+                      <p>
+                        ${esc(x.organization?.name)}
+                        ·
+                        ${esc(x.vehicle?.category)}
+                      </p>
+
+                    </div>
+
+                  </div>
+                `
+              )
+              .join('')
         v.image
           ? `
             <img
@@ -431,13 +828,47 @@ function renderVehicles() {
               class="vehicle-image"
             >
           `
-          : `
+         : `
+            <div class="card empty">
+              Noch keine Fahrzeuge in einer Organisation.
             <div class="vehicle-placeholder">
               🚘
-            </div>
-          `
-      }
+           </div>
+         `
+     }
 
+    </div>
+  `;
+}
+
+/*
+==================================================
+FAHRZEUGKATALOG
+==================================================
+*/
+
+async function renderVehicles() {
+  const can = ['ADMIN', 'PROJEKTLEITUNG'].includes(
+    state.user.role
+  );
+
+  $('#content').innerHTML = `
+    <div class="section-head">
+
+      <h3>Fahrzeugkatalog</h3>
+
+      ${
+        can
+          ? `
+            <button
+              class="primary"
+              onclick="openVehicleModal()"
+            >
+              + Fahrzeug hinzufügen
+            </button>
+          `
+          : ''
+      }
       <div class="vehicle-body">
         <h3>${escapeHtml(v.name)}</h3>
 
@@ -459,9 +890,47 @@ function renderVehicles() {
         }
       </div>
 
-    </div>
+   </div>
   `).join('');
 
+    <div class="grid cards">
+
+      ${
+        state.vehicles.length
+          ? state.vehicles
+              .map(
+                v => `
+                  <div class="card vehicle-card">
+
+                    <div class="vehicle-image">
+
+                      ${
+                        v.image
+                          ? `
+                            <img
+                              src="${esc(v.image)}"
+                              style="
+                                width:100%;
+                                height:100%;
+                                object-fit:cover;
+                              "
+                              onerror="this.style.display='none'"
+                            >
+                          `
+                          : '🚘'
+                      }
+
+                    </div>
+
+                    <div class="body">
+
+                      <h4>
+                        ${esc(v.name)}
+                      </h4>
+
+                      <p>
+                        ${esc(v.category)}
+                      </p>
   $('#content').innerHTML = `
     <div class="card">
 
@@ -487,131 +956,146 @@ function renderVehicles() {
             : ''
         }
 
+                      ${
+                        can
+                          ? `
+                            <div
+                              class="actions"
+                              style="margin-top:12px"
+                            >
+                              <button
+                                class="smallbtn danger"
+                                onclick="deleteVehicle('${v.id}')"
+                              >
+                                Löschen
+                              </button>
+                            </div>
+                          `
+                          : ''
+                      }
       </div>
 
+                    </div>
       <div class="vehicle-grid">
 
+                  </div>
+                `
+              )
+              .join('')
+          : `
+            <div class="card empty">
         ${
           cards ||
           `
             <div class="empty">
-              Noch keine Fahrzeuge vorhanden.
-            </div>
-          `
+             Noch keine Fahrzeuge vorhanden.
+           </div>
+         `
+      }
         }
 
       </div>
 
-    </div>
-  `;
+   </div>
+ `;
 }
 
+/*
+==================================================
+FAHRZEUG HINZUFÜGEN
+==================================================
+*/
+
 function openVehicleModal() {
-  $('#modalContent').innerHTML = `
-    <h3>Fahrzeug hinzufügen</h3>
+$('#modalContent').innerHTML = `
+   <h3>Fahrzeug hinzufügen</h3>
+@@ -684,15 +502,15 @@ function openVehicleModal() {
+     </label>
 
-    <form id="vehicleForm">
-
-      <label>
-        Name
-        <input
-          name="name"
-          required
-          placeholder="z.B. BMW M5"
-        >
-      </label>
-
-      <label>
-        Kategorie
-        <input
-          name="category"
-          placeholder="z.B. Sportwagen"
-        >
-      </label>
-
-      <label>
+     <label>
+        Bild-URL
         Fahrzeugbild
-        <input
+       <input
+          name="image"
+          type="url"
+          placeholder="https://..."
           name="imageFile"
           type="file"
           accept="image/jpeg,image/png,image/webp,image/gif"
-        >
+       >
 
-        <small class="muted">
+       <small class="muted">
+          Füge einen direkten Link zu einem Bild ein.
           JPG, PNG, WEBP oder GIF · maximal 5 MB
-        </small>
-      </label>
+       </small>
+     </label>
 
-      <div
-        id="vehicleImagePreview"
-        style="
-          margin-top:12px;
-          display:none;
-          border-radius:12px;
-          overflow:hidden;
-          height:180px;
-          background:#111;
-        "
-      >
-        <img
-          id="vehiclePreviewImg"
-          alt="Bildvorschau"
-          style="
-            width:100%;
-            height:100%;
-            object-fit:cover;
-          "
-        >
-      </div>
+@@ -707,7 +525,6 @@ function openVehicleModal() {
+         background:#111;
+       "
+     >
 
-      <div class="btnrow">
+       <img
+         id="vehiclePreviewImg"
+         alt="Bildvorschau"
+@@ -717,7 +534,6 @@ function openVehicleModal() {
+           object-fit:cover;
+         "
+       >
 
-        <button
-          type="button"
-          class="smallbtn"
-          onclick="closeModal()"
-        >
-          Abbrechen
-        </button>
+     </div>
 
+     <div class="btnrow">
+@@ -730,7 +546,10 @@ function openVehicleModal() {
+         Abbrechen
+       </button>
+
+        <button class="primary">
         <button
           id="vehicleSubmitBtn"
           class="primary"
         >
-          Speichern
-        </button>
+         Speichern
+       </button>
 
-      </div>
+@@ -740,48 +559,101 @@ function openVehicleModal() {
+ `;
 
-    </form>
-  `;
+const form = $('#vehicleForm');
 
-  const form = $('#vehicleForm');
-  const imageInput =
+const imageInput =
+    form.querySelector('[name="image"]');
     form.querySelector('[name="imageFile"]');
 
-  const preview =
-    $('#vehicleImagePreview');
+const preview =
+$('#vehicleImagePreview');
 
-  const previewImg =
-    $('#vehiclePreviewImg');
+const previewImg =
+$('#vehiclePreviewImg');
 
+  imageInput.addEventListener('input', () => {
+    const url = imageInput.value.trim();
   imageInput.addEventListener('change', () => {
     const file = imageInput.files?.[0];
 
+    if (!url) {
     if (!file) {
-      preview.style.display = 'none';
-      previewImg.removeAttribute('src');
-      return;
-    }
+preview.style.display = 'none';
+previewImg.removeAttribute('src');
+return;
+}
 
+    previewImg.onload = () => {
+      preview.style.display = 'block';
+    };
     if (file.size > 5 * 1024 * 1024) {
       toast('Das Bild darf maximal 5 MB groß sein.', true);
 
       imageInput.value = '';
 
-      preview.style.display = 'none';
-      previewImg.removeAttribute('src');
+    previewImg.onerror = () => {
+preview.style.display = 'none';
+previewImg.removeAttribute('src');
 
       return;
     }
@@ -642,13 +1126,14 @@ function openVehicleModal() {
 
     previewImg.onload = () => {
       preview.style.display = 'block';
-    };
+};
 
+    previewImg.src = url;
     previewImg.src = objectUrl;
-  });
+});
 
-  form.onsubmit = async e => {
-    e.preventDefault();
+form.onsubmit = async e => {
+e.preventDefault();
 
     const submitBtn =
       $('#vehicleSubmitBtn');
@@ -656,7 +1141,10 @@ function openVehicleModal() {
     submitBtn.disabled = true;
     submitBtn.textContent = 'Wird gespeichert...';
 
-    try {
+try {
+      const data = Object.fromEntries(
+        new FormData(e.target)
+      );
       const formData =
         new FormData(form);
 
@@ -675,55 +1163,167 @@ function openVehicleModal() {
         imageUrl = await uploadImage(file);
       }
 
-      await api('/api/vehicles', {
-        method: 'POST',
+await api('/api/vehicles', {
+method: 'POST',
+        body: data
         body: {
           name,
           category,
           image: imageUrl
         }
-      });
+});
 
-      closeModal();
+closeModal();
+@@ -794,17 +666,22 @@ function openVehicleModal() {
 
-      await loadBase();
-
-      renderPage('vehicles');
-
-      toast('Fahrzeug hinzugefügt');
-
-    } catch (err) {
-      toast(err.message, true);
+} catch (err) {
+toast(err.message, true);
 
       submitBtn.disabled = false;
       submitBtn.textContent = 'Speichern';
-    }
-  };
+}
+};
 
-  $('#modal').classList.remove('hidden');
+$('#modal').classList.remove('hidden');
 }
 
 async function deleteVehicle(id) {
+  if (!confirm('Fahrzeug wirklich löschen?')) return;
   if (!confirm('Fahrzeug wirklich löschen?')) {
     return;
   }
 
-  try {
+try {
+    await api('/api/vehicles/' + id, {
     await api(`/api/vehicles/${id}`, {
-      method: 'DELETE'
-    });
+method: 'DELETE'
+});
 
-    await loadBase();
+@@ -814,513 +691,347 @@ async function deleteVehicle(id) {
 
-    renderPage('vehicles');
+toast('Fahrzeug gelöscht');
 
-    toast('Fahrzeug gelöscht');
-
+  } catch (e) {
+    toast(e.message, true);
   } catch (err) {
     toast(err.message, true);
-  }
+}
 }
 
+/*
+==================================================
+BANN-RICHTLINIEN
+==================================================
+*/
+
+const banRules = [
+  ['6 Stunden', ['Bug-Kleidung']],
+
+  [
+    '12 Stunden',
+    [
+      'Safezone nicht beachtet',
+      'Unnötiges Beleidigen',
+      'Combat-Logging',
+      'Auf das Regelwerk hinweisen',
+      'OOC Talk',
+      'FailRP',
+      'Meta-Gaming'
+    ]
+  ],
+
+  [
+    '1 Tag',
+    [
+      'PowerRP',
+      'Leichenschändigung',
+      'Medic-/Mech. Schutz nicht eingehalten',
+      'RP-Flucht',
+      'MD / PD Auto fahren'
+    ]
+  ],
+
+  [
+    '3 Tage',
+    [
+      'Drittpartei',
+      'Supportflucht',
+      'Leichen looten',
+      'Medic / Mechaniker umgebracht',
+      'Unangekündigte Stürmung',
+      'Rechnung falsch ausstellen',
+      'Baiting',
+      'Reden am Boden',
+      'Unnötiges Gambo',
+      'Roleplay RDM',
+      'Bugweitergabe'
+    ]
+  ],
+
+  [
+    '1 Woche',
+    [
+      'Job-Abuse',
+      'Lügen im Support',
+      'Beleidigung im Support',
+      'Korruption als Führungsebene',
+      'Bugusing',
+      'SPAM (Calladmin etc.)',
+      'Extreme Trolling (erstmalig)'
+    ]
+  ],
+
+  ['2 Wochen', []],
+
+  ['1 Monat', ['RDM', 'VDM']],
+
+  [
+    '1 Jahr',
+    [
+      'AFK-Farming',
+      'Fake-Admin',
+      'Import-Car weitergeben'
+    ]
+  ],
+
+  [
+    'Permanent',
+    [
+      'Modding',
+      'Rassismus',
+      'Verkauf auf Modding / Sicherheitsban',
+      'CM Ausschluss',
+      'Beleidigung der Toten',
+      'Bugusing mit Geld',
+      'Vergeltungs-RP',
+      'Modderwaffen',
+      'Import-Car weitergeben bei schwerem Missbrauch',
+      'Staatswaffenhandel',
+      'Handeln mit Staatsfahrzeugen',
+      'Massen-RDM/VDM',
+      'extremes Trolling',
+      'Multiaccount',
+      'Blacklist Wörter',
+      'Trolling',
+      'Cheating/Hacking',
+      'Exploiting',
+      'Doxxing',
+      'Real-Life-Drohungen',
+      'Ban-Umgehung',
+      'Diskriminierung'
+    ]
+  ]
+];
+
+async function renderRules() {
+  $('#content').innerHTML = `
+    <div class="notice">
+      Teamler sollen die Richtlinien einhalten.
+      Abweichungen müssen begründet werden.
+      Banns über TX sind nachvollziehbar zu dokumentieren,
+      z.B. „Bann: FailRP“.
+      Regeln können durch berechtigte Rollen angepasst werden.
+    </div>
 function renderFleet() {
   const fleets = state.organizations.map(org => {
     const vehicles =
@@ -739,6 +1339,25 @@ function renderFleet() {
           ${escapeHtml(org.id)}
         </p>
 
+    <div style="margin-top:18px">
+
+      ${banRules
+        .map(
+          g => `
+            <div class="card rule-group">
+
+              <h4>${g[0]}</h4>
+
+              ${
+                g[1].length
+                  ? g[1]
+                      .map(
+                        x => `
+                          <div class="rule">
+                            <span>${esc(x)}</span>
+                            <span class="sanction">
+                              ${g[0]}
+                            </span>
         ${
           vehicles.length
             ? `
@@ -758,8 +1377,13 @@ function renderFleet() {
                         : `
                           <div class="vehicle-placeholder">
                             🚘
-                          </div>
-                        `
+                         </div>
+                       `
+                      )
+                      .join('')
+                  : `
+                    <div class="muted">
+                      Keine Einträge.
                     }
 
                     <div class="vehicle-body">
@@ -770,8 +1394,14 @@ function renderFleet() {
                       <p class="muted">
                         ${escapeHtml(v.category || '')}
                       </p>
-                    </div>
+                   </div>
+                  `
+              }
 
+            </div>
+          `
+        )
+        .join('')}
                   </div>
                 `).join('')}
               </div>
@@ -834,20 +1464,35 @@ function renderOrganizations() {
           </tbody>
         </table>
       </div>
-    </div>
-  `;
+   </div>
+ `;
 }
 
+async function renderJail() {
+  const rows = await api('/api/admin-jail');
+
 function renderUsers() {
-  $('#content').innerHTML = `
+$('#content').innerHTML = `
+    <div class="card table-wrap">
     <div class="card">
 
+      <table class="table">
       <h3>Benutzer</h3>
 
+        <thead>
+          <tr>
+            <th>Regel</th>
+            <th>Admin-Jail</th>
+          </tr>
+        </thead>
       <div class="table-wrap">
 
+        <tbody>
         <table>
 
+          ${rows
+            .map(
+              r => `
           <thead>
             <tr>
               <th>Benutzername</th>
@@ -861,16 +1506,37 @@ function renderUsers() {
 
             ${
               state.users.map(u => `
-                <tr>
+               <tr>
+                  <td>${esc(r.name)}</td>
                   <td>${escapeHtml(u.username)}</td>
                   <td>${escapeHtml(u.role)}</td>
                   <td>${escapeHtml(u.organization_id || '-')}</td>
-                  <td>
+                 <td>
+                    <b>${r.minutes} Minuten</b>
                     ${u.active === false ? 'Inaktiv' : 'Aktiv'}
-                  </td>
-                </tr>
+                 </td>
+               </tr>
               `).join('') ||
-              `
+             `
+            )
+            .join('')}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+}
+
+async function renderOrganizations() {
+  $('#content').innerHTML = `
+    <div class="grid cards">
+
+      ${state.organizations
+        .map(
+          o => `
+            <div class="card">
                 <tr>
                   <td colspan="4">
                     <span class="muted">
@@ -881,26 +1547,71 @@ function renderUsers() {
               `
             }
 
+              <h3>
+                ${esc(o.name)}
+              </h3>
           </tbody>
 
+              <p class="muted">
+                ${
+                  state.user.role === 'LEADER' &&
+                  state.user.organizationId !== o.id
+                    ? '—'
+                    : 'Organisation'
+                }
+              </p>
         </table>
 
+            </div>
+          `
+        )
+        .join('')}
       </div>
 
-    </div>
-  `;
+   </div>
+ `;
 }
 
+async function renderUsers() {
+  const rows = await api('/api/users');
+
 function renderAudit() {
-  $('#content').innerHTML = `
+$('#content').innerHTML = `
+    <div class="section-head">
     <div class="card">
 
+      <h3>Benutzer & Rollen</h3>
       <h3>Audit-Log</h3>
 
+      ${
+        state.user.role === 'PROJEKTLEITUNG'
+          ? `
+            <button
+              class="primary"
+              onclick="openUserModal()"
+            >
+              + Benutzer
+            </button>
+          `
+          : ''
+      }
       <div class="table-wrap">
 
+    </div>
+
+    <div class="card table-wrap">
+
+      <table class="table">
         <table>
 
+        <thead>
+          <tr>
+            <th>Benutzer</th>
+            <th>Rolle</th>
+            <th>Organisation</th>
+            <th>Status</th>
+          </tr>
+        </thead>
           <thead>
             <tr>
               <th>Zeit</th>
@@ -909,33 +1620,48 @@ function renderAudit() {
             </tr>
           </thead>
 
+        <tbody>
           <tbody>
 
+          ${rows
+            .map(
+              u => `
             ${
               state.audit.map(a => `
-                <tr>
-                  <td>
+               <tr>
+
+                 <td>
+                    ${esc(u.username)}
                     ${escapeHtml(
                       a.created_at ||
                       a.timestamp ||
                       '-'
                     )}
-                  </td>
+                 </td>
 
-                  <td>
+                 <td>
+                    ${esc(u.role)}
                     ${escapeHtml(
                       a.username ||
                       a.user ||
                       '-'
                     )}
-                  </td>
+                 </td>
 
-                  <td>
+                 <td>
+                    ${esc(orgName(u.organizationId))}
                     ${escapeHtml(
                       a.action ||
                       '-'
                     )}
-                  </td>
+                 </td>
+
+                  <td>
+                    ${
+                      u.active
+                        ? '<span class="success-text">Aktiv</span>'
+                        : '<span class="danger-text">Deaktiviert</span>'
+                    }
                 </tr>
               `).join('') ||
               `
@@ -944,27 +1670,96 @@ function renderAudit() {
                     <span class="muted">
                       Keine Einträge vorhanden.
                     </span>
-                  </td>
-                </tr>
-              `
+                 </td>
+
+               </tr>
+             `
+            )
+            .join('')}
             }
 
+        </tbody>
           </tbody>
 
+      </table>
         </table>
 
       </div>
 
-    </div>
-  `;
+   </div>
+ `;
 }
 
+function openUserModal() {
+  $('#modalContent').innerHTML = `
+    <h3>Benutzer anlegen</h3>
+
+    <form id="userForm">
+
+      <label>
+        Benutzername
+        <input
+          name="username"
+          required
+        >
+      </label>
+
+      <label>
+        Passwort
+        <input
+          name="password"
+          type="password"
+          required
+        >
+      </label>
+
+      <label>
+        Rolle
+
+        <select name="role">
+          <option>LEADER</option>
+          <option>ADMIN</option>
+          <option>PROJEKTLEITUNG</option>
+        </select>
+
+      </label>
+
+      <label>
+        Organisation
+
+        <select name="organizationId">
+
+          ${state.organizations
+            .map(
+              o => `
+                <option value="${o.id}">
+                  ${esc(o.name)}
+                </option>
+              `
+            )
+            .join('')}
+
+        </select>
+
+      </label>
+
+      <div class="btnrow">
 function renderRules() {
   $('#content').innerHTML = `
     <div class="card">
 
+        <button
+          type="button"
+          class="smallbtn"
+          onclick="closeModal()"
+        >
+          Abbrechen
+        </button>
       <h3>Bann-Richtlinien</h3>
 
+        <button class="primary">
+          Anlegen
+        </button>
       <ul>
         <li>Cheating / Exploiting</li>
         <li>Massives Trolling</li>
@@ -973,35 +1768,109 @@ function renderRules() {
         <li>Umgehen von Sanktionen</li>
       </ul>
 
+      </div>
       <p class="muted">
         Die konkreten Sanktionen werden durch die Teamleitung festgelegt.
       </p>
 
+    </form>
     </div>
-  `;
+ `;
+
+  $('#userForm').onsubmit = async e => {
+    e.preventDefault();
+
+    try {
+      await api('/api/users', {
+        method: 'POST',
+        body: Object.fromEntries(
+          new FormData(e.target)
+        )
+      });
+
+      closeModal();
+
+      renderPage('users');
+
+      toast('Benutzer angelegt');
+
+    } catch (err) {
+      toast(err.message, true);
+    }
+  };
+
+  $('#modal').classList.remove('hidden');
 }
 
+async function renderAudit() {
+  const rows = await api('/api/audit');
+
 function renderJail() {
-  $('#content').innerHTML = `
+$('#content').innerHTML = `
+    <div class="card table-wrap">
+
+      <table class="table">
+
+        <thead>
+          <tr>
+            <th>Zeit</th>
+            <th>Benutzer</th>
+            <th>Aktion</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+
+        <tbody>
+
+          ${rows
+            .map(
+              x => `
+                <tr>
+
+                  <td>
+                    ${new Date(
+                      x.at
+                    ).toLocaleString('de-DE')}
+                  </td>
+
+                  <td>
+                    ${esc(x.actor)}
+                  </td>
     <div class="card">
 
+                  <td>
+                    ${esc(x.action)}
+                  </td>
       <h3>Admin-Jail</h3>
 
+                  <td>
+                    ${esc(x.details)}
+                  </td>
+
+                </tr>
+              `
+            )
+            .join('')}
+
+        </tbody>
+
+      </table>
       <p class="muted">
         Hier können künftig Admin-Jail-Fälle verwaltet werden.
       </p>
 
-    </div>
-  `;
+   </div>
+ `;
 }
 
 function closeModal() {
-  $('#modal').classList.add('hidden');
+$('#modal').classList.add('hidden');
   $('#modalContent').innerHTML = '';
 }
 
+$('#loginForm').onsubmit = async e => {
 $('#loginForm').addEventListener('submit', async e => {
-  e.preventDefault();
+e.preventDefault();
 
   const username =
     $('#loginUser').value.trim();
@@ -1009,7 +1878,13 @@ $('#loginForm').addEventListener('submit', async e => {
   const password =
     $('#loginPass').value;
 
-  try {
+try {
+    const d = await api('/api/login', {
+      method: 'POST',
+      body: {
+        username: $('#loginUser').value,
+        password: $('#loginPass').value
+      }
     await login(username, password);
   } catch (err) {
     toast(err.message, true);
@@ -1024,42 +1899,68 @@ document.querySelectorAll('#nav button[data-page]')
   .forEach(btn => {
     btn.addEventListener('click', () => {
       renderPage(btn.dataset.page);
-    });
+});
   });
 
+    state.token = d.token;
+    state.user = d.user;
 $('#modalClose').addEventListener(
   'click',
   closeModal
 );
 
+    localStorage.setItem(
+      'spectra_token',
+      state.token
+    );
 $('#modal').addEventListener('click', e => {
   if (e.target === $('#modal')) {
     closeModal();
   }
 });
 
+    await loadBase();
 async function init() {
   if (!state.token) {
     return;
   }
 
+    showApp();
   try {
     const me = await api('/api/me');
 
+    renderPage('dashboard');
     state.user = me.user || me;
 
+    toast('Erfolgreich angemeldet');
     $('#loginView').classList.add('hidden');
     $('#appView').classList.remove('hidden');
 
+  } catch (err) {
+    toast(err.message, true);
+  }
+};
     updateUserUI();
 
+$('#logoutBtn').onclick = () => logout();
     await loadBase();
 
+$('#modalClose').onclick = closeModal;
     renderPage('dashboard');
 
+$('#modal').onclick = e => {
+  if (e.target.id === 'modal') {
+    closeModal();
   } catch {
     logout(false);
-  }
+}
+};
+
+document
+  .querySelectorAll('#nav button')
+  .forEach(b => {
+    b.onclick = () => renderPage(b.dataset.page);
+  });
 }
 
 init();
