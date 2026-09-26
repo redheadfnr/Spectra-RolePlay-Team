@@ -48,12 +48,6 @@ function toast(message, error = false) {
   }, 3000);
 }
 
-/*
-==================================================
-API
-==================================================
-*/
-
 async function api(url, opts = {}) {
   opts.headers = {
     ...(opts.headers || {})
@@ -64,10 +58,6 @@ async function api(url, opts = {}) {
       'Bearer ' + state.token;
   }
 
-  /*
-   * JSON automatisch setzen.
-   * FormData NICHT verändern.
-   */
   if (
     opts.body &&
     typeof opts.body !== 'string' &&
@@ -84,6 +74,7 @@ async function api(url, opts = {}) {
 
   if (response.status === 401) {
     logout(false);
+
     throw new Error(
       data.error || 'Nicht angemeldet'
     );
@@ -97,12 +88,6 @@ async function api(url, opts = {}) {
 
   return data;
 }
-
-/*
-==================================================
-LOGIN
-==================================================
-*/
 
 async function login(username, password) {
   const result = await api('/api/login', {
@@ -191,12 +176,6 @@ function updateUserUI() {
     });
 }
 
-/*
-==================================================
-DATEN LADEN
-==================================================
-*/
-
 async function loadBase() {
   const [
     dashboard,
@@ -241,12 +220,6 @@ async function loadBase() {
       audit.audit || audit || [];
   }
 }
-
-/*
-==================================================
-SEITEN
-==================================================
-*/
 
 function renderPage(page) {
   state.page = page;
@@ -309,17 +282,9 @@ function renderPage(page) {
   }
 }
 
-/*
-==================================================
-DASHBOARD
-==================================================
-*/
-
 function renderDashboard() {
   const d = state.dashboard || {};
-
-  const stats =
-    d.stats || {};
+  const stats = d.stats || {};
 
   $('#content').innerHTML = `
     <div class="stats">
@@ -371,7 +336,6 @@ function renderDashboard() {
     </div>
 
     <div class="card">
-
       <h3>Willkommen zurück</h3>
 
       <p class="muted">
@@ -382,16 +346,9 @@ function renderDashboard() {
           )}
         </strong>.
       </p>
-
     </div>
   `;
 }
-
-/*
-==================================================
-ANTRÄGE
-==================================================
-*/
 
 function renderRequests() {
   const canReview =
@@ -401,7 +358,6 @@ function renderRequests() {
   const rows =
     state.requests
       .map(request => {
-
         const status =
           request.status || '';
 
@@ -415,9 +371,7 @@ function renderRequests() {
           <tr>
 
             <td>
-              ${escapeHtml(
-                request.id
-              )}
+              ${escapeHtml(request.id)}
             </td>
 
             <td>
@@ -429,9 +383,7 @@ function renderRequests() {
             </td>
 
             <td>
-              ${escapeHtml(
-                vehicleName
-              )}
+              ${escapeHtml(vehicleName)}
             </td>
 
             <td>
@@ -445,7 +397,6 @@ function renderRequests() {
             </td>
 
             <td>
-
               ${
                 canReview &&
                 (
@@ -456,27 +407,20 @@ function renderRequests() {
                   ? `
                     <button
                       class="smallbtn"
-                      onclick="reviewRequest(
-                        '${escapeHtml(request.id)}',
-                        'APPROVED'
-                      )"
+                      onclick="reviewRequest('${escapeHtml(request.id)}','APPROVED')"
                     >
                       Genehmigen
                     </button>
 
                     <button
                       class="smallbtn danger"
-                      onclick="reviewRequest(
-                        '${escapeHtml(request.id)}',
-                        'REJECTED'
-                      )"
+                      onclick="reviewRequest('${escapeHtml(request.id)}','REJECTED')"
                     >
                       Ablehnen
                     </button>
                   `
                   : ''
               }
-
             </td>
 
           </tr>
@@ -488,7 +432,6 @@ function renderRequests() {
     <div class="card">
 
       <div class="card-head">
-
         <div>
           <h3>Fahrzeuganträge</h3>
 
@@ -496,7 +439,6 @@ function renderRequests() {
             Eingereichte Fahrzeuganträge verwalten.
           </p>
         </div>
-
       </div>
 
       <div class="table-wrap">
@@ -515,7 +457,6 @@ function renderRequests() {
           </thead>
 
           <tbody>
-
             ${
               rows ||
               `
@@ -528,26 +469,21 @@ function renderRequests() {
                 </tr>
               `
             }
-
           </tbody>
 
         </table>
 
       </div>
-
     </div>
   `;
 }
 
 async function reviewRequest(id, status) {
   try {
-    await api(
-      `/api/requests/${id}`,
-      {
-        method: 'PATCH',
-        body: { status }
-      }
-    );
+    await api(`/api/requests/${id}`, {
+      method: 'PATCH',
+      body: { status }
+    });
 
     await loadBase();
 
@@ -558,20 +494,10 @@ async function reviewRequest(id, status) {
         ? 'Antrag genehmigt'
         : 'Antrag abgelehnt'
     );
-
   } catch (error) {
-    toast(
-      error.message,
-      true
-    );
+    toast(error.message, true);
   }
 }
-
-/*
-==================================================
-FAHRZEUGE
-==================================================
-*/
 
 function renderVehicles() {
   const canManage =
@@ -587,12 +513,8 @@ function renderVehicles() {
             vehicle.image
               ? `
                 <img
-                  src="${escapeHtml(
-                    vehicle.image
-                  )}"
-                  alt="${escapeHtml(
-                    vehicle.name
-                  )}"
+                  src="${escapeHtml(vehicle.image)}"
+                  alt="${escapeHtml(vehicle.name)}"
                   class="vehicle-image"
                 >
               `
@@ -606,9 +528,7 @@ function renderVehicles() {
           <div class="vehicle-body">
 
             <h3>
-              ${escapeHtml(
-                vehicle.name
-              )}
+              ${escapeHtml(vehicle.name)}
             </h3>
 
             <p class="muted">
@@ -623,9 +543,7 @@ function renderVehicles() {
                 ? `
                   <button
                     class="smallbtn danger"
-                    onclick="deleteVehicle(
-                      '${escapeHtml(vehicle.id)}'
-                    )"
+                    onclick="deleteVehicle('${escapeHtml(vehicle.id)}')"
                   >
                     Löschen
                   </button>
@@ -634,7 +552,6 @@ function renderVehicles() {
             }
 
           </div>
-
         </div>
       `)
       .join('');
@@ -692,17 +609,25 @@ BILD UPLOAD
 
 async function uploadImage(file) {
   const formData = new FormData();
+
   formData.append('image', file);
 
-  const response = await fetch('/api/upload-image', {
-    method: 'POST',
-    headers: {
-      Authorization: 'Bearer ' + state.token
-    },
-    body: formData
-  });
+  const response = await fetch(
+    '/api/upload-image',
+    {
+      method: 'POST',
 
-  const text = await response.text();
+      headers: {
+        Authorization:
+          'Bearer ' + state.token
+      },
+
+      body: formData
+    }
+  );
+
+  const text =
+    await response.text();
 
   let result = {};
 
@@ -716,7 +641,8 @@ async function uploadImage(file) {
 
   if (!response.ok) {
     throw new Error(
-      result.error || 'Bild konnte nicht hochgeladen werden.'
+      result.error ||
+      'Bild konnte nicht hochgeladen werden.'
     );
   }
 
@@ -727,7 +653,6 @@ async function uploadImage(file) {
   }
 
   return result.url;
-}
 }
 
 /*
@@ -767,12 +692,7 @@ function openVehicleModal() {
         <input
           name="imageFile"
           type="file"
-          accept="
-            image/jpeg,
-            image/png,
-            image/webp,
-            image/gif
-          "
+          accept="image/jpeg,image/png,image/webp,image/gif"
         >
 
         <small class="muted">
@@ -849,13 +769,8 @@ function openVehicleModal() {
         imageInput.files?.[0];
 
       if (!file) {
-        preview.style.display =
-          'none';
-
-        previewImg.removeAttribute(
-          'src'
-        );
-
+        preview.style.display = 'none';
+        previewImg.removeAttribute('src');
         return;
       }
 
@@ -870,12 +785,8 @@ function openVehicleModal() {
 
         imageInput.value = '';
 
-        preview.style.display =
-          'none';
-
-        previewImg.removeAttribute(
-          'src'
-        );
+        preview.style.display = 'none';
+        previewImg.removeAttribute('src');
 
         return;
       }
@@ -888,9 +799,7 @@ function openVehicleModal() {
       ];
 
       if (
-        !allowedTypes.includes(
-          file.type
-        )
+        !allowedTypes.includes(file.type)
       ) {
         toast(
           'Bitte JPG, PNG, WEBP oder GIF auswählen.',
@@ -899,12 +808,8 @@ function openVehicleModal() {
 
         imageInput.value = '';
 
-        preview.style.display =
-          'none';
-
-        previewImg.removeAttribute(
-          'src'
-        );
+        preview.style.display = 'none';
+        previewImg.removeAttribute('src');
 
         return;
       }
@@ -913,12 +818,10 @@ function openVehicleModal() {
         URL.createObjectURL(file);
 
       previewImg.onload = () => {
-        preview.style.display =
-          'block';
+        preview.style.display = 'block';
       };
 
-      previewImg.src =
-        objectUrl;
+      previewImg.src = objectUrl;
     }
   );
 
@@ -930,8 +833,7 @@ function openVehicleModal() {
       const submitButton =
         $('#vehicleSubmitBtn');
 
-      submitButton.disabled =
-        true;
+      submitButton.disabled = true;
 
       submitButton.textContent =
         'Wird gespeichert...';
@@ -942,28 +844,19 @@ function openVehicleModal() {
 
         const name =
           String(
-            formData.get('name') ||
-            ''
+            formData.get('name') || ''
           ).trim();
 
         const category =
           String(
-            formData.get('category') ||
-            ''
+            formData.get('category') || ''
           ).trim();
 
         const file =
-          formData.get(
-            'imageFile'
-          );
+          formData.get('imageFile');
 
         let imageUrl = '';
 
-        /*
-         * Nur hochladen,
-         * wenn wirklich ein Bild
-         * ausgewählt wurde.
-         */
         if (
           file &&
           file instanceof File &&
@@ -1011,9 +904,7 @@ function openVehicleModal() {
       }
     };
 
-  $('#modal').classList.remove(
-    'hidden'
-  );
+  $('#modal').classList.remove('hidden');
 }
 
 async function deleteVehicle(id) {
@@ -1037,15 +928,10 @@ async function deleteVehicle(id) {
 
     renderPage('vehicles');
 
-    toast(
-      'Fahrzeug gelöscht'
-    );
+    toast('Fahrzeug gelöscht');
 
   } catch (error) {
-    toast(
-      error.message,
-      true
-    );
+    toast(error.message, true);
   }
 }
 
@@ -1099,12 +985,8 @@ async function renderFleet() {
                         vehicle.image
                           ? `
                             <img
-                              src="${escapeHtml(
-                                vehicle.image
-                              )}"
-                              alt="${escapeHtml(
-                                vehicle.name
-                              )}"
+                              src="${escapeHtml(vehicle.image)}"
+                              alt="${escapeHtml(vehicle.name)}"
                               class="vehicle-image"
                             >
                           `
@@ -1119,8 +1001,7 @@ async function renderFleet() {
 
                         <h3>
                           ${escapeHtml(
-                            vehicle.name ||
-                            '-'
+                            vehicle.name || '-'
                           )}
                         </h3>
 
@@ -1134,8 +1015,7 @@ async function renderFleet() {
 
                         <p class="muted">
                           ${escapeHtml(
-                            vehicle.category ||
-                            ''
+                            vehicle.category || ''
                           )}
                         </p>
 
@@ -1157,10 +1037,7 @@ async function renderFleet() {
     `;
 
   } catch (error) {
-    toast(
-      error.message,
-      true
-    );
+    toast(error.message, true);
   }
 }
 
@@ -1177,9 +1054,7 @@ function renderOrganizations() {
         <tr>
 
           <td>
-            ${escapeHtml(
-              org.id
-            )}
+            ${escapeHtml(org.id)}
           </td>
 
           <td>
@@ -1248,21 +1123,16 @@ function renderUsers() {
         <tr>
 
           <td>
-            ${escapeHtml(
-              user.username
-            )}
+            ${escapeHtml(user.username)}
+          </td>
+
+          <td>
+            ${escapeHtml(user.role)}
           </td>
 
           <td>
             ${escapeHtml(
-              user.role
-            )}
-          </td>
-
-          <td>
-            ${escapeHtml(
-              user.organization_id ||
-              '-'
+              user.organization_id || '-'
             )}
           </td>
 
@@ -1353,8 +1223,7 @@ function renderAudit() {
 
           <td>
             ${escapeHtml(
-              entry.action ||
-              '-'
+              entry.action || '-'
             )}
           </td>
 
@@ -1459,10 +1328,7 @@ MODAL
 */
 
 function closeModal() {
-  $('#modal').classList.add(
-    'hidden'
-  );
-
+  $('#modal').classList.add('hidden');
   $('#modalContent').innerHTML = '';
 }
 
@@ -1479,13 +1345,10 @@ $('#loginForm').addEventListener(
     event.preventDefault();
 
     const username =
-      $('#loginUser')
-        .value
-        .trim();
+      $('#loginUser').value.trim();
 
     const password =
-      $('#loginPass')
-        .value;
+      $('#loginPass').value;
 
     if (!username || !password) {
       toast(
@@ -1503,6 +1366,7 @@ $('#loginForm').addEventListener(
       );
 
     } catch (error) {
+
       toast(
         error.message,
         true
@@ -1564,6 +1428,7 @@ async function init() {
   }
 
   try {
+
     const result =
       await api('/api/me');
 
@@ -1583,9 +1448,7 @@ async function init() {
 
     await loadBase();
 
-    renderPage(
-      'dashboard'
-    );
+    renderPage('dashboard');
 
   } catch {
     logout(false);
