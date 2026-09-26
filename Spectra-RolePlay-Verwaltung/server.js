@@ -7,15 +7,21 @@ const bcrypt = require('bcryptjs');
 const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { neon } = require('@neondatabase/serverless');
 
 console.log('Spectra server starting...');
 
 const app = express();
 
 const PORT = Number(process.env.PORT || 3000);
+const sql = neon(process.env.DATABASE_URL);
 const DB_FILE = path.join(__dirname, 'data', 'db.json');
+
 const SESSION_TTL =
-  Number(process.env.SESSION_TTL_HOURS || 12) * 60 * 60 * 1000;
+  Number(process.env.SESSION_TTL_HOURS || 12) *
+  60 *
+  60 *
+  1000;
 
 app.use(helmet({ contentSecurityPolicy: false }));
 
@@ -34,39 +40,139 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 
 // =====================================================
-// DATABASE
+// DEFAULT DATABASE
 // =====================================================
 
-function loadDB() {
+function emptyDB() {
+  return {
+    organizations: [],
+    vehicles: [],
+    users: [],
+    organizationVehicles: [],
+    requests: [],
+    rules: [],
+    adminJailRules: [],
+    audit: [],
+    sessions: []
+  };
+}
+
+
+// =====================================================
+// LOAD INITIAL DATA FROM db.json
+// =====================================================
+
+function loadLocalDB() {
   try {
-    return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    return JSON.parse(
+      fs.readFileSync(DB_FILE, 'utf8')
+    );
   } catch {
-    return {
-      organizations: [],
-      vehicles: [],
-      users: [],
-      organizationVehicles: [],
-      requests: [],
-      rules: [],
-      adminJailRules: [],
-      audit: [],
-      sessions: []
-    };
+    return emptyDB();
   }
 }
 
 
-// ACHTUNG:
-// Diese Funktion darf auf Vercel nicht benutzt werden,
-// weil das Dateisystem dort schreibgeschützt ist.
-function saveDB(db) {
+// =====================================================
+// NEON DATABASE
+// =====================================================
+
+async function setupDatabase() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS app_state (
+      id INTEGER PRIMARY KEY,
+      data JSONB NOT NULL
+    )
+  `;
+
+  const result = await sql`
+    SELECT data
+    FROM app_state
+    WHERE id = 1
+    LIMIT 1
+  `;
+
+  if (result.length === 0) {
+    console.log('No Neon data found. Importing db.json...');
+
+    const initialDB = loadLocalDB();
+
+    await sql`
+      INSERT INTO app_state (id, data)
+      VALUES (1, ${JSON.stringify(initialDB)}::jsonb)
+    `;
+
+    return initialDB;
+  }
+
+  return result[0].data;
+}
+
+
+// Die Datenbank wird einmal beim Start geladen.
+let db = null;
+
+const dbReady = setupDatabase()
+  .then(async loadedDB => {
+    db = loadedDB || emptyDB();
+
+    if (!Array.isArray(db.organizations)) db.organizations = [];
+    if (!Array.isArray(db.vehicles)) db.vehicles = [];
+    if (!Array.isArray(db.users)) db.users = [];
+    if (!Array.isArray(db.organizationVehicles)) {
+      db.organizationVehicles = [];
+    }
+    if (!Array.isArray(db.requests)) db.requests = [];
+    if (!Array.isArray(db.rules)) db.rules = [];
+    if (!Array.isArray(db.adminJailRules)) {
+      db.adminJailRules = [];
+    }
+    if (!Array.isArray(db.audit)) db.audit = [];
+    if (!Array.isArray(db.sessions)) db.sessions = [];
+
+    await seedUsers();
+
+    console.log('Neon database ready.');
+
+    return db;
+  })
+  .catch(error => {
+    console.error('DATABASE STARTUP ERROR:', error);
+    throw error;
+  });
+
+
+// Jede API-Anfrage wartet, bis Neon geladen wurde.
+app.use(async (req, res, next) => {
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+    await dbReady;
+    next();
   } catch (error) {
-    console.error('Database write failed:', error.message);
+    console.error(error);
+
+    res.status(500).json({
+      error: 'Datenbank konnte nicht geladen werden'
+    });
   }
+});
+
+
+// =====================================================
+// SAVE DATABASE TO NEON
+// =====================================================
+
+async function saveDB() {
+  await sql`
+    UPDATE app_state
+    SET data = ${JSON.stringify(db)}::jsonb
+    WHERE id = 1
+  `;
 }
 
+
+// =====================================================
+// USER HELPERS
+// =====================================================
 
 function cleanUser(u) {
   return u
@@ -81,7 +187,15 @@ function cleanUser(u) {
 }
 
 
-function audit(db, actor, action, details = '') {
+// =====================================================
+// AUDIT
+// =====================================================
+
+function audit(
+  actor,
+  action,
+  details = ''
+) {
   db.audit.unshift({
     id: randomUUID(),
     at: new Date().toISOString(),
@@ -95,65 +209,73 @@ function audit(db, actor, action, details = '') {
 
 
 // =====================================================
-// LOAD DATABASE
+// SEED USERS
 // =====================================================
 
-let db = loadDB();
+async function seedUsers() {
+  const seeds = [];
 
+  if (process.env.ADMIN_PASSWORD) {
+    seeds.push({
+      username: 'admin',
+      role: 'ADMIN',
+      organizationId: null,
+      password: process.env.ADMIN_PASSWORD
+    });
+  }
 
-// =====================================================
-// DEFAULT USERS
-// =====================================================
+  if (process.env.PROJEKTLEITUNG_PASSWORD) {
+    seeds.push({
+      username: 'projektleitung',
+      role: 'PROJEKTLEITUNG',
+      organizationId: null,
+      password: process.env.PROJEKTLEITUNG_PASSWORD
+    });
+  }
 
-const defaultUsers = [];
+  if (process.env.LEADER_PASSWORD) {
+    seeds.push({
+      username: 'leader',
+      role: 'LEADER',
+      organizationId:
+        db.organizations.find(
+          o => o.name === process.env.LEADER_ORG
+        )?.id ||
+        db.organizations[0]?.id ||
+        null,
+      password: process.env.LEADER_PASSWORD
+    });
+  }
 
-if (process.env.ADMIN_PASSWORD) {
-  defaultUsers.push({
-    id: 'user_admin',
-    username: 'admin',
-    role: 'ADMIN',
-    organizationId: null,
-    active: true,
-    passwordHash: bcrypt.hashSync(process.env.ADMIN_PASSWORD, 12)
-  });
-}
+  let changed = false;
 
-if (process.env.PROJEKTLEITUNG_PASSWORD) {
-  defaultUsers.push({
-    id: 'user_projektleitung',
-    username: 'projektleitung',
-    role: 'PROJEKTLEITUNG',
-    organizationId: null,
-    active: true,
-    passwordHash: bcrypt.hashSync(
-      process.env.PROJEKTLEITUNG_PASSWORD,
-      12
-    )
-  });
-}
+  for (const seed of seeds) {
+    const existing = db.users.find(
+      u =>
+        u.username.toLowerCase() ===
+        seed.username.toLowerCase()
+    );
 
-if (process.env.LEADER_PASSWORD) {
-  defaultUsers.push({
-    id: 'user_leader',
-    username: 'leader',
-    role: 'LEADER',
-    organizationId:
-      db.organizations.find(
-        o => o.name === process.env.LEADER_ORG
-      )?.id || db.organizations[0]?.id || null,
-    active: true,
-    passwordHash: bcrypt.hashSync(
-      process.env.LEADER_PASSWORD,
-      12
-    )
-  });
-}
+    if (!existing) {
+      db.users.push({
+        id: randomUUID(),
+        username: seed.username,
+        role: seed.role,
+        organizationId: seed.organizationId,
+        active: true,
+        passwordHash: bcrypt.hashSync(
+          seed.password,
+          12
+        )
+      });
 
+      changed = true;
+    }
+  }
 
-// Wenn keine Benutzer in db.json stehen,
-// werden die Vercel-Environment-User verwendet.
-if (db.users.length === 0) {
-  db.users = defaultUsers;
+  if (changed) {
+    await saveDB();
+  }
 }
 
 
@@ -178,7 +300,9 @@ function auth(req, res, next) {
   }
 
   const user = db.users.find(
-    u => u.id === session.userId && u.active
+    u =>
+      u.id === session.userId &&
+      u.active
   );
 
   if (!user) {
@@ -194,6 +318,10 @@ function auth(req, res, next) {
 }
 
 
+// =====================================================
+// ROLES
+// =====================================================
+
 function roles(...allowed) {
   return (req, res, next) => {
     if (!allowed.includes(req.user.role)) {
@@ -207,10 +335,10 @@ function roles(...allowed) {
 }
 
 
-function ownOrg(req, orgId) {
+function ownOrg(req, organizationId) {
   return (
     req.user.role !== 'LEADER' ||
-    req.user.organizationId === orgId
+    req.user.organizationId === organizationId
   );
 }
 
@@ -236,11 +364,15 @@ function orgName(id) {
 // =====================================================
 
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body || {};
+  const {
+    username,
+    password
+  } = req.body || {};
 
   if (!username || !password) {
     return res.status(400).json({
-      error: 'Benutzername und Passwort erforderlich'
+      error:
+        'Benutzername und Passwort erforderlich'
     });
   }
 
@@ -253,7 +385,10 @@ app.post('/api/login', async (req, res) => {
 
   if (
     !user ||
-    !(await bcrypt.compare(password, user.passwordHash))
+    !(await bcrypt.compare(
+      password,
+      user.passwordHash
+    ))
   ) {
     return res.status(401).json({
       error: 'Ungültige Zugangsdaten'
@@ -267,17 +402,22 @@ app.post('/api/login', async (req, res) => {
   db.sessions.push({
     token,
     userId: user.id,
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(
-      Date.now() + SESSION_TTL
-    ).toISOString()
+    createdAt:
+      new Date().toISOString(),
+    expiresAt:
+      new Date(
+        Date.now() + SESSION_TTL
+      ).toISOString()
   });
 
   db.sessions = db.sessions.filter(
-    s => new Date(s.expiresAt) > new Date()
+    s =>
+      new Date(s.expiresAt) > new Date()
   );
 
-  audit(db, user, 'LOGIN');
+  audit(db.user, 'LOGIN');
+
+  await saveDB();
 
   res.json({
     token,
@@ -290,143 +430,194 @@ app.post('/api/login', async (req, res) => {
 // LOGOUT
 // =====================================================
 
-app.post('/api/logout', auth, (req, res) => {
-  db.sessions = db.sessions.filter(
-    s => s.token !== req.token
-  );
+app.post(
+  '/api/logout',
+  auth,
+  async (req, res) => {
+    db.sessions =
+      db.sessions.filter(
+        s => s.token !== req.token
+      );
 
-  audit(db, req.user, 'LOGOUT');
+    audit(
+      req.user,
+      'LOGOUT'
+    );
 
-  res.json({
-    ok: true
-  });
-});
+    await saveDB();
+
+    res.json({
+      ok: true
+    });
+  }
+);
 
 
 // =====================================================
 // CURRENT USER
 // =====================================================
 
-app.get('/api/me', auth, (req, res) => {
-  res.json({
-    user: cleanUser(req.user)
-  });
-});
+app.get(
+  '/api/me',
+  auth,
+  (req, res) => {
+    res.json({
+      user: cleanUser(req.user)
+    });
+  }
+);
 
 
 // =====================================================
 // DASHBOARD
 // =====================================================
 
-app.get('/api/dashboard', auth, (req, res) => {
-  const visibleRequests =
-    req.user.role === 'LEADER'
-      ? db.requests.filter(
-          r =>
-            r.organizationId ===
-            req.user.organizationId
-        )
-      : db.requests;
+app.get(
+  '/api/dashboard',
+  auth,
+  (req, res) => {
+    const visibleRequests =
+      req.user.role === 'LEADER'
+        ? db.requests.filter(
+            r =>
+              r.organizationId ===
+              req.user.organizationId
+          )
+        : db.requests;
 
-  const fleet =
-    req.user.role === 'LEADER'
-      ? db.organizationVehicles.filter(
-          x =>
-            x.organizationId ===
-            req.user.organizationId
-        )
-      : db.organizationVehicles;
+    const fleet =
+      req.user.role === 'LEADER'
+        ? db.organizationVehicles.filter(
+            x =>
+              x.organizationId ===
+              req.user.organizationId
+          )
+        : db.organizationVehicles;
 
-  res.json({
-    stats: {
-      requests: visibleRequests.length,
+    res.json({
+      stats: {
+        requests:
+          visibleRequests.length,
 
-      pending: visibleRequests.filter(r =>
-        ['BEANTRAGT', 'IN_PRUEFUNG'].includes(
-          r.status
-        )
-      ).length,
+        pending:
+          visibleRequests.filter(
+            r =>
+              [
+                'BEANTRAGT',
+                'IN_PRUEFUNG'
+              ].includes(r.status)
+          ).length,
 
-      approved: visibleRequests.filter(
-        r => r.status === 'GENEHMIGT'
-      ).length,
+        approved:
+          visibleRequests.filter(
+            r =>
+              r.status ===
+              'GENEHMIGT'
+          ).length,
 
-      fleet: fleet.length
-    },
+        fleet:
+          fleet.length
+      },
 
-    recent: visibleRequests.slice(0, 8)
-  });
-});
+      recent:
+        visibleRequests.slice(0, 8)
+    });
+  }
+);
 
 
 // =====================================================
 // ORGANIZATIONS
 // =====================================================
 
-app.get('/api/organizations', auth, (req, res) => {
-  res.json(db.organizations);
-});
+app.get(
+  '/api/organizations',
+  auth,
+  (req, res) => {
+    res.json(db.organizations);
+  }
+);
 
 
 // =====================================================
 // VEHICLES
 // =====================================================
 
-app.get('/api/vehicles', auth, (req, res) => {
-  res.json(db.vehicles);
-});
+app.get(
+  '/api/vehicles',
+  auth,
+  (req, res) => {
+    res.json(db.vehicles);
+  }
+);
 
 
 // =====================================================
 // FLEET
 // =====================================================
 
-app.get('/api/fleet', auth, (req, res) => {
-  const rows = db.organizationVehicles
-    .filter(
-      x =>
-        req.user.role !== 'LEADER' ||
-        x.organizationId ===
-          req.user.organizationId
-    )
-    .map(x => ({
-      ...x,
+app.get(
+  '/api/fleet',
+  auth,
+  (req, res) => {
+    const rows =
+      db.organizationVehicles
+        .filter(
+          x =>
+            req.user.role !== 'LEADER' ||
+            x.organizationId ===
+              req.user.organizationId
+        )
+        .map(x => ({
+          ...x,
 
-      vehicle: db.vehicles.find(
-        v => v.id === x.vehicleId
-      ),
+          vehicle:
+            db.vehicles.find(
+              v =>
+                v.id ===
+                x.vehicleId
+            ),
 
-      organization: db.organizations.find(
-        o => o.id === x.organizationId
-      )
-    }));
+          organization:
+            db.organizations.find(
+              o =>
+                o.id ===
+                x.organizationId
+            )
+        }));
 
-  res.json(rows);
-});
+    res.json(rows);
+  }
+);
 
 
 // =====================================================
 // REQUESTS
 // =====================================================
 
-app.get('/api/requests', auth, (req, res) => {
-  let rows = db.requests.filter(
-    r =>
-      req.user.role !== 'LEADER' ||
-      r.organizationId ===
-        req.user.organizationId
-  );
+app.get(
+  '/api/requests',
+  auth,
+  (req, res) => {
+    let rows =
+      db.requests.filter(
+        r =>
+          req.user.role !== 'LEADER' ||
+          r.organizationId ===
+            req.user.organizationId
+      );
 
-  rows = rows.map(r => ({
-    ...r,
-    vehicleName: vehicleName(r.vehicleId),
-    organizationName: orgName(
-      r.organizationId
-    )
-  }));
+    rows = rows.map(r => ({
+      ...r,
+      vehicleName:
+        vehicleName(r.vehicleId),
+      organizationName:
+        orgName(r.organizationId)
+    }));
 
-  res.json(rows);
-});
+    res.json(rows);
+  }
+);
 
 
 // =====================================================
@@ -441,7 +632,7 @@ app.post(
     'ADMIN',
     'PROJEKTLEITUNG'
   ),
-  (req, res) => {
+  async (req, res) => {
     const {
       applicant,
       organizationId,
@@ -462,7 +653,12 @@ app.post(
       });
     }
 
-    if (!ownOrg(req, organizationId)) {
+    if (
+      !ownOrg(
+        req,
+        organizationId
+      )
+    ) {
       return res.status(403).json({
         error:
           'Nur die eigene Organisation darf beantragt werden'
@@ -471,10 +667,12 @@ app.post(
 
     if (
       !db.organizations.some(
-        o => o.id === organizationId
+        o =>
+          o.id === organizationId
       ) ||
       !db.vehicles.some(
-        v => v.id === vehicleId
+        v =>
+          v.id === vehicleId
       )
     ) {
       return res.status(400).json({
@@ -486,8 +684,10 @@ app.post(
     if (
       db.organizationVehicles.some(
         x =>
-          x.organizationId === organizationId &&
-          x.vehicleId === vehicleId
+          x.organizationId ===
+            organizationId &&
+          x.vehicleId ===
+            vehicleId
       )
     ) {
       return res.status(409).json({
@@ -499,11 +699,12 @@ app.post(
     if (
       db.requests.some(
         r =>
-          r.organizationId === organizationId &&
-          r.vehicleId === vehicleId &&
-          !['ABGELEHNT'].includes(
-            r.status
-          )
+          r.organizationId ===
+            organizationId &&
+          r.vehicleId ===
+            vehicleId &&
+          r.status !==
+            'ABGELEHNT'
       )
     ) {
       return res.status(409).json({
@@ -512,7 +713,7 @@ app.post(
       });
     }
 
-    const r = {
+    const request = {
       id: randomUUID(),
       applicant,
       organizationId,
@@ -523,26 +724,31 @@ app.post(
           .toISOString()
           .slice(0, 10),
       status: 'BEANTRAGT',
-      imageUrl: imageUrl || '',
+      imageUrl:
+        imageUrl || '',
       reviewerId: null,
       reviewer: null,
-      comment: comment || '',
+      comment:
+        comment || '',
       createdAt:
         new Date().toISOString()
     };
 
-    db.requests.unshift(r);
+    db.requests.unshift(request);
 
     audit(
-      db,
       req.user,
       'REQUEST_CREATED',
       `${orgName(
         organizationId
-      )} / ${vehicleName(vehicleId)}`
+      )} / ${vehicleName(
+        vehicleId
+      )}`
     );
 
-    res.status(201).json(r);
+    await saveDB();
+
+    res.status(201).json(request);
   }
 );
 
@@ -554,20 +760,29 @@ app.post(
 app.patch(
   '/api/requests/:id',
   auth,
-  roles('ADMIN', 'PROJEKTLEITUNG'),
-  (req, res) => {
-    const r = db.requests.find(
-      x => x.id === req.params.id
-    );
+  roles(
+    'ADMIN',
+    'PROJEKTLEITUNG'
+  ),
+  async (req, res) => {
+    const request =
+      db.requests.find(
+        x =>
+          x.id ===
+          req.params.id
+      );
 
-    if (!r) {
+    if (!request) {
       return res.status(404).json({
-        error: 'Antrag nicht gefunden'
+        error:
+          'Antrag nicht gefunden'
       });
     }
 
-    const { status, comment } =
-      req.body || {};
+    const {
+      status,
+      comment
+    } = req.body || {};
 
     const allowed = [
       'BEANTRAGT',
@@ -581,51 +796,65 @@ app.patch(
       !allowed.includes(status)
     ) {
       return res.status(400).json({
-        error: 'Ungültiger Status'
+        error:
+          'Ungültiger Status'
       });
     }
 
     if (
-      status === 'GENEHMIGT' &&
+      status ===
+        'GENEHMIGT' &&
       !db.organizationVehicles.some(
         x =>
           x.organizationId ===
-            r.organizationId &&
-          x.vehicleId === r.vehicleId
+            request.organizationId &&
+          x.vehicleId ===
+            request.vehicleId
       )
     ) {
       db.organizationVehicles.push({
         id: randomUUID(),
         organizationId:
-          r.organizationId,
-        vehicleId: r.vehicleId,
-        requestId: r.id,
+          request.organizationId,
+        vehicleId:
+          request.vehicleId,
+        requestId:
+          request.id,
         addedAt:
           new Date().toISOString()
       });
     }
 
     if (status) {
-      r.status = status;
+      request.status =
+        status;
     }
 
-    if (comment !== undefined) {
-      r.comment = comment;
+    if (
+      comment !== undefined
+    ) {
+      request.comment =
+        comment;
     }
 
-    r.reviewerId = req.user.id;
-    r.reviewer = req.user.username;
-    r.reviewedAt =
+    request.reviewerId =
+      req.user.id;
+
+    request.reviewer =
+      req.user.username;
+
+    request.reviewedAt =
       new Date().toISOString();
 
     audit(
-      db,
       req.user,
       'REQUEST_UPDATED',
-      `${r.id} -> ${r.status}`
+      `${request.id} -> ${request.status}`
     );
 
-    res.json(r);
+    await saveDB();
+
+    res.json(request);
   }
 );
 
@@ -637,28 +866,40 @@ app.patch(
 app.delete(
   '/api/requests/:id',
   auth,
-  roles('ADMIN', 'PROJEKTLEITUNG'),
-  (req, res) => {
-    const i = db.requests.findIndex(
-      x => x.id === req.params.id
-    );
+  roles(
+    'ADMIN',
+    'PROJEKTLEITUNG'
+  ),
+  async (req, res) => {
+    const index =
+      db.requests.findIndex(
+        x =>
+          x.id ===
+          req.params.id
+      );
 
-    if (i < 0) {
+    if (index < 0) {
       return res.status(404).json({
-        error: 'Antrag nicht gefunden'
+        error:
+          'Antrag nicht gefunden'
       });
     }
 
-    const [r] = db.requests.splice(i, 1);
+    const [request] =
+      db.requests.splice(
+        index,
+        1
+      );
 
     audit(
-      db,
       req.user,
       'REQUEST_DELETED',
-      `${r.applicant} / ${vehicleName(
-        r.vehicleId
+      `${request.applicant} / ${vehicleName(
+        request.vehicleId
       )}`
     );
+
+    await saveDB();
 
     res.json({
       ok: true
@@ -671,29 +912,38 @@ app.delete(
 // RULES
 // =====================================================
 
-app.get('/api/rules', auth, (req, res) => {
-  res.json(db.rules);
-});
-
+app.get(
+  '/api/rules',
+  auth,
+  (req, res) => {
+    res.json(db.rules);
+  }
+);
 
 app.put(
   '/api/rules',
   auth,
-  roles('ADMIN', 'PROJEKTLEITUNG'),
-  (req, res) => {
+  roles(
+    'ADMIN',
+    'PROJEKTLEITUNG'
+  ),
+  async (req, res) => {
     if (!Array.isArray(req.body)) {
       return res.status(400).json({
-        error: 'Array erwartet'
+        error:
+          'Array erwartet'
       });
     }
 
-    db.rules = req.body;
+    db.rules =
+      req.body;
 
     audit(
-      db,
       req.user,
       'RULES_UPDATED'
     );
+
+    await saveDB();
 
     res.json(db.rules);
   }
@@ -704,31 +954,44 @@ app.put(
 // ADMIN JAIL
 // =====================================================
 
-app.get('/api/admin-jail', auth, (req, res) => {
-  res.json(db.adminJailRules);
-});
-
+app.get(
+  '/api/admin-jail',
+  auth,
+  (req, res) => {
+    res.json(
+      db.adminJailRules
+    );
+  }
+);
 
 app.put(
   '/api/admin-jail',
   auth,
-  roles('ADMIN', 'PROJEKTLEITUNG'),
-  (req, res) => {
+  roles(
+    'ADMIN',
+    'PROJEKTLEITUNG'
+  ),
+  async (req, res) => {
     if (!Array.isArray(req.body)) {
       return res.status(400).json({
-        error: 'Array erwartet'
+        error:
+          'Array erwartet'
       });
     }
 
-    db.adminJailRules = req.body;
+    db.adminJailRules =
+      req.body;
 
     audit(
-      db,
       req.user,
       'ADMIN_JAIL_UPDATED'
     );
 
-    res.json(db.adminJailRules);
+    await saveDB();
+
+    res.json(
+      db.adminJailRules
+    );
   }
 );
 
@@ -740,10 +1003,15 @@ app.put(
 app.get(
   '/api/users',
   auth,
-  roles('ADMIN', 'PROJEKTLEITUNG'),
+  roles(
+    'ADMIN',
+    'PROJEKTLEITUNG'
+  ),
   (req, res) => {
     res.json(
-      db.users.map(cleanUser)
+      db.users.map(
+        cleanUser
+      )
     );
   }
 );
@@ -756,7 +1024,9 @@ app.get(
 app.post(
   '/api/users',
   auth,
-  roles('PROJEKTLEITUNG'),
+  roles(
+    'PROJEKTLEITUNG'
+  ),
   async (req, res) => {
     const {
       username,
@@ -775,7 +1045,8 @@ app.post(
       ].includes(role)
     ) {
       return res.status(400).json({
-        error: 'Ungültige Benutzerdaten'
+        error:
+          'Ungültige Benutzerdaten'
       });
     }
 
@@ -792,7 +1063,7 @@ app.post(
       });
     }
 
-    const u = {
+    const user = {
       id: randomUUID(),
       username,
       role,
@@ -802,20 +1073,24 @@ app.post(
           : null,
       active: true,
       passwordHash:
-        await bcrypt.hash(password, 12)
+        await bcrypt.hash(
+          password,
+          12
+        )
     };
 
-    db.users.push(u);
+    db.users.push(user);
 
     audit(
-      db,
       req.user,
       'USER_CREATED',
       username
     );
 
+    await saveDB();
+
     res.status(201).json(
-      cleanUser(u)
+      cleanUser(user)
     );
   }
 );
@@ -828,15 +1103,21 @@ app.post(
 app.patch(
   '/api/users/:id',
   auth,
-  roles('PROJEKTLEITUNG'),
+  roles(
+    'PROJEKTLEITUNG'
+  ),
   async (req, res) => {
-    const u = db.users.find(
-      x => x.id === req.params.id
-    );
+    const user =
+      db.users.find(
+        x =>
+          x.id ===
+          req.params.id
+      );
 
-    if (!u) {
+    if (!user) {
       return res.status(404).json({
-        error: 'Benutzer nicht gefunden'
+        error:
+          'Benutzer nicht gefunden'
       });
     }
 
@@ -848,31 +1129,44 @@ app.patch(
     } = req.body || {};
 
     if (role) {
-      u.role = role;
+      user.role =
+        role;
     }
 
-    if (organizationId !== undefined) {
-      u.organizationId = organizationId;
+    if (
+      organizationId !==
+      undefined
+    ) {
+      user.organizationId =
+        organizationId;
     }
 
-    if (active !== undefined) {
-      u.active = !!active;
+    if (
+      active !==
+      undefined
+    ) {
+      user.active =
+        !!active;
     }
 
     if (password) {
-      u.passwordHash =
-        await bcrypt.hash(password, 12);
+      user.passwordHash =
+        await bcrypt.hash(
+          password,
+          12
+        );
     }
 
     audit(
-      db,
       req.user,
       'USER_UPDATED',
-      u.username
+      user.username
     );
 
+    await saveDB();
+
     res.json(
-      cleanUser(u)
+      cleanUser(user)
     );
   }
 );
@@ -885,7 +1179,10 @@ app.patch(
 app.get(
   '/api/audit',
   auth,
-  roles('ADMIN', 'PROJEKTLEITUNG'),
+  roles(
+    'ADMIN',
+    'PROJEKTLEITUNG'
+  ),
   (req, res) => {
     res.json(db.audit);
   }
@@ -899,8 +1196,11 @@ app.get(
 app.post(
   '/api/vehicles',
   auth,
-  roles('ADMIN', 'PROJEKTLEITUNG'),
-  (req, res) => {
+  roles(
+    'ADMIN',
+    'PROJEKTLEITUNG'
+  ),
+  async (req, res) => {
     const {
       name,
       category,
@@ -909,28 +1209,36 @@ app.post(
 
     if (!name) {
       return res.status(400).json({
-        error: 'Name erforderlich'
+        error:
+          'Name erforderlich'
       });
     }
 
-    const v = {
+    const vehicle = {
       id: randomUUID(),
       name,
       category:
-        category || 'Sonstiges',
-      image: image || ''
+        category ||
+        'Sonstiges',
+      image:
+        image || ''
     };
 
-    db.vehicles.push(v);
+    db.vehicles.push(
+      vehicle
+    );
 
     audit(
-      db,
       req.user,
       'VEHICLE_CREATED',
       name
     );
 
-    res.status(201).json(v);
+    await saveDB();
+
+    res.status(201).json(
+      vehicle
+    );
   }
 );
 
@@ -942,19 +1250,23 @@ app.post(
 app.delete(
   '/api/vehicles/:id',
   auth,
-  roles('ADMIN', 'PROJEKTLEITUNG'),
-  (req, res) => {
+  roles(
+    'ADMIN',
+    'PROJEKTLEITUNG'
+  ),
+  async (req, res) => {
     if (
       db.organizationVehicles.some(
         x =>
-          x.vehicleId === req.params.id
+          x.vehicleId ===
+          req.params.id
       ) ||
       db.requests.some(
         x =>
-          x.vehicleId === req.params.id &&
-          !['ABGELEHNT'].includes(
-            x.status
-          )
+          x.vehicleId ===
+            req.params.id &&
+          x.status !==
+            'ABGELEHNT'
       )
     ) {
       return res.status(409).json({
@@ -963,25 +1275,33 @@ app.delete(
       });
     }
 
-    const i = db.vehicles.findIndex(
-      x => x.id === req.params.id
-    );
+    const index =
+      db.vehicles.findIndex(
+        x =>
+          x.id ===
+          req.params.id
+      );
 
-    if (i < 0) {
+    if (index < 0) {
       return res.status(404).json({
-        error: 'Fahrzeug nicht gefunden'
+        error:
+          'Fahrzeug nicht gefunden'
       });
     }
 
-    const [v] =
-      db.vehicles.splice(i, 1);
+    const [vehicle] =
+      db.vehicles.splice(
+        index,
+        1
+      );
 
     audit(
-      db,
       req.user,
       'VEHICLE_DELETED',
-      v.name
+      vehicle.name
     );
+
+    await saveDB();
 
     res.json({
       ok: true
@@ -997,11 +1317,15 @@ app.delete(
 app.post(
   '/api/reset-demo',
   auth,
-  roles('PROJEKTLEITUNG'),
-  (req, res) => {
+  roles(
+    'PROJEKTLEITUNG'
+  ),
+  async (req, res) => {
     db.requests = [];
     db.organizationVehicles = [];
     db.audit = [];
+
+    await saveDB();
 
     res.json({
       ok: true
@@ -1014,15 +1338,18 @@ app.post(
 // FRONTEND
 // =====================================================
 
-app.get('*', (req, res) => {
-  res.sendFile(
-    path.join(
-      __dirname,
-      'public',
-      'index.html'
-    )
-  );
-});
+app.get(
+  '*',
+  (req, res) => {
+    res.sendFile(
+      path.join(
+        __dirname,
+        'public',
+        'index.html'
+      )
+    );
+  }
+);
 
 
 // =====================================================
