@@ -12,14 +12,14 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.0.2",
-    "@vercel/blob": "^1.1.1"
     "express": "^4.21.2",
     "helmet": "^8.0.0",
-    "multer": "^2.0.0"
     "express-rate-limit": "^7.5.0",
     "dotenv": "^16.4.7",
     "bcryptjs": "^2.4.3",
-    "uuid": "^11.0.5"
+    "uuid": "^11.0.5",
+    "@neondatabase/serverless": "^1.0.0",
+    "@vercel/blob": "^1.1.1",
+    "multer": "^2.0.0"
   }
 }
