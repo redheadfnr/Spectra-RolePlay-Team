@@ -691,49 +691,43 @@ BILD UPLOAD
 */
 
 async function uploadImage(file) {
-  const formData =
-    new FormData();
+  const formData = new FormData();
+  formData.append('image', file);
 
-  formData.append(
-    'image',
-    file
-  );
+  const response = await fetch('/api/upload-image', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + state.token
+    },
+    body: formData
+  });
 
-  const response =
-    await fetch(
-      '/api/upload-image',
-      {
-        method: 'POST',
+  const text = await response.text();
 
-        headers: {
-          Authorization:
-            'Bearer ' +
-            state.token
-        },
+  let result = {};
 
-        body: formData
-      }
+  try {
+    result = JSON.parse(text);
+  } catch {
+    throw new Error(
+      'Der Bildserver hat keine gültige Antwort geliefert.'
     );
-
-  const result =
-    await response
-      .json()
-      .catch(() => ({}));
+  }
 
   if (!response.ok) {
     throw new Error(
-      result.error ||
-      'Bild konnte nicht hochgeladen werden.'
+      result.error || 'Bild konnte nicht hochgeladen werden.'
     );
   }
 
   if (!result.url) {
     throw new Error(
-      'Upload erfolgreich, aber keine Bild-URL erhalten.'
+      'Bild wurde hochgeladen, aber keine Bild-URL erhalten.'
     );
   }
 
   return result.url;
+}
 }
 
 /*
