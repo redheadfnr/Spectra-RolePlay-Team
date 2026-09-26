@@ -7,15 +7,24 @@ const bcrypt = require('bcryptjs');
 const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
+
 const { neon } = require('@neondatabase/serverless');
+const { put } = require('@vercel/blob');
+const multer = require('multer');
 
 console.log('Spectra server starting...');
 
 const app = express();
 
 const PORT = Number(process.env.PORT || 3000);
+
 const sql = neon(process.env.DATABASE_URL);
-const DB_FILE = path.join(__dirname, 'data', 'db.json');
+
+const DB_FILE = path.join(
+  __dirname,
+  'data',
+  'db.json'
+);
 
 const SESSION_TTL =
   Number(process.env.SESSION_TTL_HOURS || 12) *
@@ -23,9 +32,54 @@ const SESSION_TTL =
   60 *
   1000;
 
-app.use(helmet({ contentSecurityPolicy: false }));
 
-app.use(express.json({ limit: '1mb' }));
+// =====================================================
+// MULTER – BILDER
+// =====================================================
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+
+  limits: {
+    fileSize: 5 * 1024 * 1024
+  },
+
+  fileFilter: (req, file, cb) => {
+    const allowed = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'image/gif'
+    ];
+
+    if (!allowed.includes(file.mimetype)) {
+      return cb(
+        new Error(
+          'Nur JPG, PNG, WEBP und GIF sind erlaubt.'
+        )
+      );
+    }
+
+    cb(null, true);
+  }
+});
+
+
+// =====================================================
+// MIDDLEWARE
+// =====================================================
+
+app.use(
+  helmet({
+    contentSecurityPolicy: false
+  })
+);
+
+app.use(
+  express.json({
+    limit: '1mb'
+  })
+);
 
 app.use(
   rateLimit({
@@ -36,7 +90,11 @@ app.use(
   })
 );
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(
+  express.static(
+    path.join(__dirname, 'public')
+  )
+);
 
 
 // =====================================================
@@ -59,13 +117,16 @@ function emptyDB() {
 
 
 // =====================================================
-// LOAD INITIAL DATA FROM db.json
+// LOAD LOCAL DATABASE
 // =====================================================
 
 function loadLocalDB() {
   try {
     return JSON.parse(
-      fs.readFileSync(DB_FILE, 'utf8')
+      fs.readFileSync(
+        DB_FILE,
+        'utf8'
+      )
     );
   } catch {
     return emptyDB();
@@ -93,13 +154,19 @@ async function setupDatabase() {
   `;
 
   if (result.length === 0) {
-    console.log('No Neon data found. Importing db.json...');
+    console.log(
+      'No Neon data found. Importing db.json...'
+    );
 
-    const initialDB = loadLocalDB();
+    const initialDB =
+      loadLocalDB();
 
     await sql`
       INSERT INTO app_state (id, data)
-      VALUES (1, ${JSON.stringify(initialDB)}::jsonb)
+      VALUES (
+        1,
+        ${JSON.stringify(initialDB)}::jsonb
+      )
     `;
 
     return initialDB;
@@ -109,56 +176,94 @@ async function setupDatabase() {
 }
 
 
-// Die Datenbank wird einmal beim Start geladen.
 let db = null;
 
-const dbReady = setupDatabase()
-  .then(async loadedDB => {
-    db = loadedDB || emptyDB();
 
-    if (!Array.isArray(db.organizations)) db.organizations = [];
-    if (!Array.isArray(db.vehicles)) db.vehicles = [];
-    if (!Array.isArray(db.users)) db.users = [];
-    if (!Array.isArray(db.organizationVehicles)) {
-      db.organizationVehicles = [];
-    }
-    if (!Array.isArray(db.requests)) db.requests = [];
-    if (!Array.isArray(db.rules)) db.rules = [];
-    if (!Array.isArray(db.adminJailRules)) {
-      db.adminJailRules = [];
-    }
-    if (!Array.isArray(db.audit)) db.audit = [];
-    if (!Array.isArray(db.sessions)) db.sessions = [];
+const dbReady =
+  setupDatabase()
+    .then(async loadedDB => {
+      db =
+        loadedDB ||
+        emptyDB();
 
-    await seedUsers();
+      if (!Array.isArray(db.organizations)) {
+        db.organizations = [];
+      }
 
-    console.log('Neon database ready.');
+      if (!Array.isArray(db.vehicles)) {
+        db.vehicles = [];
+      }
 
-    return db;
-  })
-  .catch(error => {
-    console.error('DATABASE STARTUP ERROR:', error);
-    throw error;
-  });
+      if (!Array.isArray(db.users)) {
+        db.users = [];
+      }
 
+      if (!Array.isArray(db.organizationVehicles)) {
+        db.organizationVehicles = [];
+      }
 
-// Jede API-Anfrage wartet, bis Neon geladen wurde.
-app.use(async (req, res, next) => {
-  try {
-    await dbReady;
-    next();
-  } catch (error) {
-    console.error(error);
+      if (!Array.isArray(db.requests)) {
+        db.requests = [];
+      }
 
-    res.status(500).json({
-      error: 'Datenbank konnte nicht geladen werden'
+      if (!Array.isArray(db.rules)) {
+        db.rules = [];
+      }
+
+      if (!Array.isArray(db.adminJailRules)) {
+        db.adminJailRules = [];
+      }
+
+      if (!Array.isArray(db.audit)) {
+        db.audit = [];
+      }
+
+      if (!Array.isArray(db.sessions)) {
+        db.sessions = [];
+      }
+
+      await seedUsers();
+
+      console.log(
+        'Neon database ready.'
+      );
+
+      return db;
+    })
+    .catch(error => {
+      console.error(
+        'DATABASE STARTUP ERROR:',
+        error
+      );
+
+      throw error;
     });
-  }
-});
 
 
 // =====================================================
-// SAVE DATABASE TO NEON
+// WAIT FOR DATABASE
+// =====================================================
+
+app.use(
+  async (req, res, next) => {
+    try {
+      await dbReady;
+
+      next();
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error:
+          'Datenbank konnte nicht geladen werden'
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// SAVE DATABASE
 // =====================================================
 
 async function saveDB() {
@@ -180,7 +285,8 @@ function cleanUser(u) {
         id: u.id,
         username: u.username,
         role: u.role,
-        organizationId: u.organizationId,
+        organizationId:
+          u.organizationId,
         active: u.active
       }
     : null;
@@ -199,12 +305,18 @@ function audit(
   db.audit.unshift({
     id: randomUUID(),
     at: new Date().toISOString(),
-    actor: actor?.username || 'SYSTEM',
+    actor:
+      actor?.username ||
+      'SYSTEM',
     action,
     details
   });
 
-  db.audit = db.audit.slice(0, 1000);
+  db.audit =
+    db.audit.slice(
+      0,
+      1000
+    );
 }
 
 
@@ -215,58 +327,79 @@ function audit(
 async function seedUsers() {
   const seeds = [];
 
-  if (process.env.ADMIN_PASSWORD) {
+  if (
+    process.env.ADMIN_PASSWORD
+  ) {
     seeds.push({
       username: 'admin',
       role: 'ADMIN',
       organizationId: null,
-      password: process.env.ADMIN_PASSWORD
+      password:
+        process.env.ADMIN_PASSWORD
     });
   }
 
-  if (process.env.PROJEKTLEITUNG_PASSWORD) {
+  if (
+    process.env.PROJEKTLEITUNG_PASSWORD
+  ) {
     seeds.push({
-      username: 'projektleitung',
-      role: 'PROJEKTLEITUNG',
+      username:
+        'projektleitung',
+      role:
+        'PROJEKTLEITUNG',
       organizationId: null,
-      password: process.env.PROJEKTLEITUNG_PASSWORD
+      password:
+        process.env
+          .PROJEKTLEITUNG_PASSWORD
     });
   }
 
-  if (process.env.LEADER_PASSWORD) {
+  if (
+    process.env.LEADER_PASSWORD
+  ) {
     seeds.push({
       username: 'leader',
       role: 'LEADER',
+
       organizationId:
         db.organizations.find(
-          o => o.name === process.env.LEADER_ORG
+          o =>
+            o.name ===
+            process.env.LEADER_ORG
         )?.id ||
         db.organizations[0]?.id ||
         null,
-      password: process.env.LEADER_PASSWORD
+
+      password:
+        process.env.LEADER_PASSWORD
     });
   }
 
   let changed = false;
 
   for (const seed of seeds) {
-    const existing = db.users.find(
-      u =>
-        u.username.toLowerCase() ===
-        seed.username.toLowerCase()
-    );
+    const existing =
+      db.users.find(
+        u =>
+          u.username.toLowerCase() ===
+          seed.username.toLowerCase()
+      );
 
     if (!existing) {
       db.users.push({
         id: randomUUID(),
-        username: seed.username,
-        role: seed.role,
-        organizationId: seed.organizationId,
+        username:
+          seed.username,
+        role:
+          seed.role,
+        organizationId:
+          seed.organizationId,
         active: true,
-        passwordHash: bcrypt.hashSync(
-          seed.password,
-          12
-        )
+        passwordHash:
+          bcrypt.hashSync(
+            seed.password,
+            12
+          )
       });
 
       changed = true;
@@ -283,31 +416,46 @@ async function seedUsers() {
 // AUTH
 // =====================================================
 
-function auth(req, res, next) {
-  const token = (req.headers.authorization || '')
-    .replace(/^Bearer\s+/i, '');
+function auth(
+  req,
+  res,
+  next
+) {
+  const token =
+    (req.headers.authorization || '')
+      .replace(
+        /^Bearer\s+/i,
+        ''
+      );
 
-  const session = db.sessions.find(
-    s =>
-      s.token === token &&
-      new Date(s.expiresAt) > new Date()
-  );
+  const session =
+    db.sessions.find(
+      s =>
+        s.token === token &&
+        new Date(
+          s.expiresAt
+        ) > new Date()
+    );
 
   if (!session) {
     return res.status(401).json({
-      error: 'Nicht angemeldet'
+      error:
+        'Nicht angemeldet'
     });
   }
 
-  const user = db.users.find(
-    u =>
-      u.id === session.userId &&
-      u.active
-  );
+  const user =
+    db.users.find(
+      u =>
+        u.id ===
+          session.userId &&
+        u.active
+    );
 
   if (!user) {
     return res.status(401).json({
-      error: 'Benutzer nicht verfügbar'
+      error:
+        'Benutzer nicht verfügbar'
     });
   }
 
@@ -323,10 +471,19 @@ function auth(req, res, next) {
 // =====================================================
 
 function roles(...allowed) {
-  return (req, res, next) => {
-    if (!allowed.includes(req.user.role)) {
+  return (
+    req,
+    res,
+    next
+  ) => {
+    if (
+      !allowed.includes(
+        req.user.role
+      )
+    ) {
       return res.status(403).json({
-        error: 'Keine Berechtigung'
+        error:
+          'Keine Berechtigung'
       });
     }
 
@@ -335,17 +492,24 @@ function roles(...allowed) {
 }
 
 
-function ownOrg(req, organizationId) {
+function ownOrg(
+  req,
+  organizationId
+) {
   return (
-    req.user.role !== 'LEADER' ||
-    req.user.organizationId === organizationId
+    req.user.role !==
+      'LEADER' ||
+    req.user.organizationId ===
+      organizationId
   );
 }
 
 
 function vehicleName(id) {
   return (
-    db.vehicles.find(v => v.id === id)?.name ||
+    db.vehicles.find(
+      v => v.id === id
+    )?.name ||
     'Unbekannt'
   );
 }
@@ -353,7 +517,9 @@ function vehicleName(id) {
 
 function orgName(id) {
   return (
-    db.organizations.find(o => o.id === id)?.name ||
+    db.organizations.find(
+      o => o.id === id
+    )?.name ||
     'Unbekannt'
   );
 }
@@ -363,67 +529,90 @@ function orgName(id) {
 // LOGIN
 // =====================================================
 
-app.post('/api/login', async (req, res) => {
-  const {
-    username,
-    password
-  } = req.body || {};
+app.post(
+  '/api/login',
+  async (req, res) => {
+    const {
+      username,
+      password
+    } = req.body || {};
 
-  if (!username || !password) {
-    return res.status(400).json({
-      error:
-        'Benutzername und Passwort erforderlich'
+    if (
+      !username ||
+      !password
+    ) {
+      return res.status(400).json({
+        error:
+          'Benutzername und Passwort erforderlich'
+      });
+    }
+
+    const user =
+      db.users.find(
+        u =>
+          u.username.toLowerCase() ===
+            String(
+              username
+            ).toLowerCase() &&
+          u.active
+      );
+
+    if (
+      !user ||
+      !(await bcrypt.compare(
+        password,
+        user.passwordHash
+      ))
+    ) {
+      return res.status(401).json({
+        error:
+          'Ungültige Zugangsdaten'
+      });
+    }
+
+    const token =
+      randomUUID() +
+      randomUUID().replaceAll(
+        '-',
+        ''
+      );
+
+    db.sessions.push({
+      token,
+      userId: user.id,
+
+      createdAt:
+        new Date().toISOString(),
+
+      expiresAt:
+        new Date(
+          Date.now() +
+            SESSION_TTL
+        ).toISOString()
+    });
+
+    db.sessions =
+      db.sessions.filter(
+        s =>
+          new Date(
+            s.expiresAt
+          ) > new Date()
+      );
+
+    audit(
+      user,
+      'LOGIN'
+    );
+
+    await saveDB();
+
+    res.json({
+      token,
+      user:
+        cleanUser(user)
     });
   }
-
-  const user = db.users.find(
-    u =>
-      u.username.toLowerCase() ===
-        String(username).toLowerCase() &&
-      u.active
-  );
-
-  if (
-    !user ||
-    !(await bcrypt.compare(
-      password,
-      user.passwordHash
-    ))
-  ) {
-    return res.status(401).json({
-      error: 'Ungültige Zugangsdaten'
-    });
-  }
-
-  const token =
-    randomUUID() +
-    randomUUID().replaceAll('-', '');
-
-  db.sessions.push({
-    token,
-    userId: user.id,
-    createdAt:
-      new Date().toISOString(),
-    expiresAt:
-      new Date(
-        Date.now() + SESSION_TTL
-      ).toISOString()
-  });
-
-  db.sessions = db.sessions.filter(
-    s =>
-      new Date(s.expiresAt) > new Date()
-  );
-
-  audit(user, 'LOGIN');
-
-  await saveDB();
-
-  res.json({
-    token,
-    user: cleanUser(user)
-  });
-});
+);
 
 
 // =====================================================
@@ -433,10 +622,15 @@ app.post('/api/login', async (req, res) => {
 app.post(
   '/api/logout',
   auth,
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     db.sessions =
       db.sessions.filter(
-        s => s.token !== req.token
+        s =>
+          s.token !==
+          req.token
       );
 
     audit(
@@ -460,9 +654,15 @@ app.post(
 app.get(
   '/api/me',
   auth,
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
     res.json({
-      user: cleanUser(req.user)
+      user:
+        cleanUser(
+          req.user
+        )
     });
   }
 );
@@ -475,9 +675,13 @@ app.get(
 app.get(
   '/api/dashboard',
   auth,
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
     const visibleRequests =
-      req.user.role === 'LEADER'
+      req.user.role ===
+      'LEADER'
         ? db.requests.filter(
             r =>
               r.organizationId ===
@@ -486,7 +690,8 @@ app.get(
         : db.requests;
 
     const fleet =
-      req.user.role === 'LEADER'
+      req.user.role ===
+      'LEADER'
         ? db.organizationVehicles.filter(
             x =>
               x.organizationId ===
@@ -505,7 +710,9 @@ app.get(
               [
                 'BEANTRAGT',
                 'IN_PRUEFUNG'
-              ].includes(r.status)
+              ].includes(
+                r.status
+              )
           ).length,
 
         approved:
@@ -520,7 +727,10 @@ app.get(
       },
 
       recent:
-        visibleRequests.slice(0, 8)
+        visibleRequests.slice(
+          0,
+          8
+        )
     });
   }
 );
@@ -533,8 +743,13 @@ app.get(
 app.get(
   '/api/organizations',
   auth,
-  (req, res) => {
-    res.json(db.organizations);
+  (
+    req,
+    res
+  ) => {
+    res.json(
+      db.organizations
+    );
   }
 );
 
@@ -546,8 +761,13 @@ app.get(
 app.get(
   '/api/vehicles',
   auth,
-  (req, res) => {
-    res.json(db.vehicles);
+  (
+    req,
+    res
+  ) => {
+    res.json(
+      db.vehicles
+    );
   }
 );
 
@@ -559,12 +779,16 @@ app.get(
 app.get(
   '/api/fleet',
   auth,
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
     const rows =
       db.organizationVehicles
         .filter(
           x =>
-            req.user.role !== 'LEADER' ||
+            req.user.role !==
+              'LEADER' ||
             x.organizationId ===
               req.user.organizationId
         )
@@ -598,22 +822,33 @@ app.get(
 app.get(
   '/api/requests',
   auth,
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
     let rows =
       db.requests.filter(
         r =>
-          req.user.role !== 'LEADER' ||
+          req.user.role !==
+            'LEADER' ||
           r.organizationId ===
             req.user.organizationId
       );
 
-    rows = rows.map(r => ({
-      ...r,
-      vehicleName:
-        vehicleName(r.vehicleId),
-      organizationName:
-        orgName(r.organizationId)
-    }));
+    rows =
+      rows.map(r => ({
+        ...r,
+
+        vehicleName:
+          vehicleName(
+            r.vehicleId
+          ),
+
+        organizationName:
+          orgName(
+            r.organizationId
+          )
+      }));
 
     res.json(rows);
   }
@@ -632,7 +867,10 @@ app.post(
     'ADMIN',
     'PROJEKTLEITUNG'
   ),
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     const {
       applicant,
       organizationId,
@@ -640,7 +878,8 @@ app.post(
       date,
       imageUrl,
       comment
-    } = req.body || {};
+    } =
+      req.body || {};
 
     if (
       !applicant ||
@@ -668,11 +907,13 @@ app.post(
     if (
       !db.organizations.some(
         o =>
-          o.id === organizationId
+          o.id ===
+          organizationId
       ) ||
       !db.vehicles.some(
         v =>
-          v.id === vehicleId
+          v.id ===
+          vehicleId
       )
     ) {
       return res.status(400).json({
@@ -715,26 +956,39 @@ app.post(
 
     const request = {
       id: randomUUID(),
+
       applicant,
+
       organizationId,
+
       vehicleId,
+
       date:
         date ||
         new Date()
           .toISOString()
           .slice(0, 10),
-      status: 'BEANTRAGT',
+
+      status:
+        'BEANTRAGT',
+
       imageUrl:
         imageUrl || '',
+
       reviewerId: null,
+
       reviewer: null,
+
       comment:
         comment || '',
+
       createdAt:
         new Date().toISOString()
     };
 
-    db.requests.unshift(request);
+    db.requests.unshift(
+      request
+    );
 
     audit(
       req.user,
@@ -748,7 +1002,9 @@ app.post(
 
     await saveDB();
 
-    res.status(201).json(request);
+    res.status(201).json(
+      request
+    );
   }
 );
 
@@ -760,20 +1016,34 @@ app.post(
 app.patch(
   '/api/requests/:id',
   auth,
-  roles('ADMIN', 'PROJEKTLEITUNG'),
-  async (req, res) => {
+  roles(
+    'ADMIN',
+    'PROJEKTLEITUNG'
+  ),
+  async (
+    req,
+    res
+  ) => {
     try {
-      const request = db.requests.find(
-        x => x.id === req.params.id
-      );
+      const request =
+        db.requests.find(
+          x =>
+            x.id ===
+            req.params.id
+        );
 
       if (!request) {
         return res.status(404).json({
-          error: 'Antrag nicht gefunden'
+          error:
+            'Antrag nicht gefunden'
         });
       }
 
-      const { status, comment } = req.body || {};
+      const {
+        status,
+        comment
+      } =
+        req.body || {};
 
       const allowed = [
         'BEANTRAGT',
@@ -782,51 +1052,71 @@ app.patch(
         'ABGELEHNT'
       ];
 
-      if (status && !allowed.includes(status)) {
+      if (
+        status &&
+        !allowed.includes(
+          status
+        )
+      ) {
         return res.status(400).json({
-          error: 'Ungültiger Status'
+          error:
+            'Ungültiger Status'
         });
       }
 
-      // ===============================================
-      // ANTRAG GENEHMIGEN
-      // ===============================================
-
-      if (status === 'GENEHMIGT') {
-
+      if (
+        status ===
+        'GENEHMIGT'
+      ) {
         const alreadyInFleet =
           db.organizationVehicles.some(
             x =>
-              x.organizationId === request.organizationId &&
-              x.vehicleId === request.vehicleId
+              x.organizationId ===
+                request.organizationId &&
+              x.vehicleId ===
+                request.vehicleId
           );
 
         if (!alreadyInFleet) {
           db.organizationVehicles.push({
             id: randomUUID(),
-            organizationId: request.organizationId,
-            vehicleId: request.vehicleId,
-            requestId: request.id,
-            addedAt: new Date().toISOString()
+
+            organizationId:
+              request.organizationId,
+
+            vehicleId:
+              request.vehicleId,
+
+            requestId:
+              request.id,
+
+            addedAt:
+              new Date().toISOString()
           });
         }
       }
 
-      // ===============================================
-      // ANTRAG AKTUALISIEREN
-      // ===============================================
-
       if (status) {
-        request.status = status;
+        request.status =
+          status;
       }
 
-      if (comment !== undefined) {
-        request.comment = comment;
+      if (
+        comment !==
+        undefined
+      ) {
+        request.comment =
+          comment;
       }
 
-      request.reviewerId = req.user.id;
-      request.reviewer = req.user.username;
-      request.reviewedAt = new Date().toISOString();
+      request.reviewerId =
+        req.user.id;
+
+      request.reviewer =
+        req.user.username;
+
+      request.reviewedAt =
+        new Date().toISOString();
 
       audit(
         req.user,
@@ -834,21 +1124,22 @@ app.patch(
         `${request.id} -> ${request.status}`
       );
 
-      // ===============================================
-      // ALLES NACH NEON SPEICHERN
-      // ===============================================
-
       await saveDB();
 
       res.json({
         ok: true,
+
         request,
+
         fleetEntry:
-          status === 'GENEHMIGT'
+          status ===
+          'GENEHMIGT'
             ? db.organizationVehicles.find(
                 x =>
-                  x.organizationId === request.organizationId &&
-                  x.vehicleId === request.vehicleId
+                  x.organizationId ===
+                    request.organizationId &&
+                  x.vehicleId ===
+                    request.vehicleId
               ) || null
             : null
       });
@@ -860,11 +1151,13 @@ app.patch(
       );
 
       res.status(500).json({
-        error: 'Antrag konnte nicht aktualisiert werden'
+        error:
+          'Antrag konnte nicht aktualisiert werden'
       });
     }
   }
 );
+
 
 // =====================================================
 // DELETE REQUEST
@@ -877,7 +1170,10 @@ app.delete(
     'ADMIN',
     'PROJEKTLEITUNG'
   ),
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     const index =
       db.requests.findIndex(
         x =>
@@ -922,10 +1218,16 @@ app.delete(
 app.get(
   '/api/rules',
   auth,
-  (req, res) => {
-    res.json(db.rules);
+  (
+    req,
+    res
+  ) => {
+    res.json(
+      db.rules
+    );
   }
 );
+
 
 app.put(
   '/api/rules',
@@ -934,8 +1236,15 @@ app.put(
     'ADMIN',
     'PROJEKTLEITUNG'
   ),
-  async (req, res) => {
-    if (!Array.isArray(req.body)) {
+  async (
+    req,
+    res
+  ) => {
+    if (
+      !Array.isArray(
+        req.body
+      )
+    ) {
       return res.status(400).json({
         error:
           'Array erwartet'
@@ -952,7 +1261,9 @@ app.put(
 
     await saveDB();
 
-    res.json(db.rules);
+    res.json(
+      db.rules
+    );
   }
 );
 
@@ -964,12 +1275,16 @@ app.put(
 app.get(
   '/api/admin-jail',
   auth,
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
     res.json(
       db.adminJailRules
     );
   }
 );
+
 
 app.put(
   '/api/admin-jail',
@@ -978,8 +1293,15 @@ app.put(
     'ADMIN',
     'PROJEKTLEITUNG'
   ),
-  async (req, res) => {
-    if (!Array.isArray(req.body)) {
+  async (
+    req,
+    res
+  ) => {
+    if (
+      !Array.isArray(
+        req.body
+      )
+    ) {
       return res.status(400).json({
         error:
           'Array erwartet'
@@ -1014,7 +1336,10 @@ app.get(
     'ADMIN',
     'PROJEKTLEITUNG'
   ),
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
     res.json(
       db.users.map(
         cleanUser
@@ -1034,13 +1359,17 @@ app.post(
   roles(
     'PROJEKTLEITUNG'
   ),
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     const {
       username,
       password,
       role,
       organizationId
-    } = req.body || {};
+    } =
+      req.body || {};
 
     if (
       !username ||
@@ -1072,13 +1401,18 @@ app.post(
 
     const user = {
       id: randomUUID(),
+
       username,
+
       role,
+
       organizationId:
         role === 'LEADER'
           ? organizationId
           : null,
+
       active: true,
+
       passwordHash:
         await bcrypt.hash(
           password,
@@ -1086,7 +1420,9 @@ app.post(
         )
     };
 
-    db.users.push(user);
+    db.users.push(
+      user
+    );
 
     audit(
       req.user,
@@ -1113,7 +1449,10 @@ app.patch(
   roles(
     'PROJEKTLEITUNG'
   ),
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     const user =
       db.users.find(
         x =>
@@ -1133,7 +1472,8 @@ app.patch(
       organizationId,
       active,
       password
-    } = req.body || {};
+    } =
+      req.body || {};
 
     if (role) {
       user.role =
@@ -1190,8 +1530,114 @@ app.get(
     'ADMIN',
     'PROJEKTLEITUNG'
   ),
-  (req, res) => {
-    res.json(db.audit);
+  (
+    req,
+    res
+  ) => {
+    res.json(
+      db.audit
+    );
+  }
+);
+
+
+// =====================================================
+// BILD UPLOAD
+// =====================================================
+
+app.post(
+  '/api/upload-image',
+  auth,
+  roles(
+    'ADMIN',
+    'PROJEKTLEITUNG'
+  ),
+  upload.single('image'),
+  async (
+    req,
+    res
+  ) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          error:
+            'Keine Bilddatei ausgewählt'
+        });
+      }
+
+      if (
+        !process.env.BLOB_READ_WRITE_TOKEN
+      ) {
+        console.error(
+          'BLOB_READ_WRITE_TOKEN fehlt'
+        );
+
+        return res.status(500).json({
+          error:
+            'Bildspeicher ist nicht konfiguriert'
+        });
+      }
+
+      const extensionMap = {
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+        'image/gif': 'gif'
+      };
+
+      const extension =
+        extensionMap[
+          req.file.mimetype
+        ] || 'jpg';
+
+      const filename =
+        `spectra-vehicles/${randomUUID()}.${extension}`;
+
+      const blob =
+        await put(
+          filename,
+          req.file.buffer,
+          {
+            access: 'public',
+
+            token:
+              process.env
+                .BLOB_READ_WRITE_TOKEN,
+
+            contentType:
+              req.file.mimetype,
+
+            addRandomSuffix:
+              false
+          }
+        );
+
+      audit(
+        req.user,
+        'IMAGE_UPLOADED',
+        filename
+      );
+
+      await saveDB();
+
+      res.json({
+        ok: true,
+        url: blob.url,
+        filename
+      });
+
+    } catch (error) {
+      console.error(
+        'IMAGE UPLOAD ERROR:',
+        error
+      );
+
+      res.status(500).json({
+        error:
+          error.message ||
+          'Bild konnte nicht hochgeladen werden'
+      });
+    }
   }
 );
 
@@ -1207,12 +1653,16 @@ app.post(
     'ADMIN',
     'PROJEKTLEITUNG'
   ),
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     const {
       name,
       category,
       image
-    } = req.body || {};
+    } =
+      req.body || {};
 
     if (!name) {
       return res.status(400).json({
@@ -1223,10 +1673,13 @@ app.post(
 
     const vehicle = {
       id: randomUUID(),
+
       name,
+
       category:
         category ||
         'Sonstiges',
+
       image:
         image || ''
     };
@@ -1261,7 +1714,10 @@ app.delete(
     'ADMIN',
     'PROJEKTLEITUNG'
   ),
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     if (
       db.organizationVehicles.some(
         x =>
@@ -1327,9 +1783,14 @@ app.post(
   roles(
     'PROJEKTLEITUNG'
   ),
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     db.requests = [];
+
     db.organizationVehicles = [];
+
     db.audit = [];
 
     await saveDB();
@@ -1342,12 +1803,64 @@ app.post(
 
 
 // =====================================================
+// MULTER FEHLER
+// =====================================================
+
+app.use(
+  (
+    error,
+    req,
+    res,
+    next
+  ) => {
+    if (
+      error instanceof
+      multer.MulterError
+    ) {
+      if (
+        error.code ===
+        'LIMIT_FILE_SIZE'
+      ) {
+        return res.status(400).json({
+          error:
+            'Das Bild darf maximal 5 MB groß sein.'
+        });
+      }
+
+      return res.status(400).json({
+        error:
+          error.message
+      });
+    }
+
+    if (
+      error &&
+      error.message &&
+      error.message.includes(
+        'Nur JPG'
+      )
+    ) {
+      return res.status(400).json({
+        error:
+          error.message
+      });
+    }
+
+    next(error);
+  }
+);
+
+
+// =====================================================
 // FRONTEND
 // =====================================================
 
 app.get(
   '*',
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
     res.sendFile(
       path.join(
         __dirname,
