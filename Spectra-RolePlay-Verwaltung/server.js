@@ -16,106 +16,6 @@ console.log('Spectra server starting...');
 
 const app = express();
 
-const multer = require('multer');
-const { put } = require('@vercel/blob');
-const { randomUUID } = require('crypto');
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 5 * 1024 * 1024
-  },
-  fileFilter: (req, file, cb) => {
-    const allowed = [
-      'image/jpeg',
-      'image/png',
-      'image/webp',
-      'image/gif'
-    ];
-
-    if (!allowed.includes(file.mimetype)) {
-      return cb(
-        new Error(
-          'Nur JPG, PNG, WEBP und GIF sind erlaubt.'
-        )
-      );
-    }
-
-    cb(null, true);
-  }
-});
-
-app.post(
-  '/api/upload-image',
-  auth,
-  upload.single('image'),
-  async (req, res) => {
-    try {
-      if (
-        req.user.role !== 'ADMIN' &&
-        req.user.role !== 'PROJEKTLEITUNG'
-      ) {
-        return res.status(403).json({
-          error: 'Keine Berechtigung.'
-        });
-      }
-
-      if (!process.env.BLOB_READ_WRITE_TOKEN) {
-        return res.status(500).json({
-          error: 'BLOB_READ_WRITE_TOKEN fehlt.'
-        });
-      }
-
-      if (!req.file) {
-        return res.status(400).json({
-          error: 'Kein Bild ausgewählt.'
-        });
-      }
-
-      const extension =
-        req.file.mimetype === 'image/jpeg'
-          ? 'jpg'
-          : req.file.mimetype === 'image/png'
-            ? 'png'
-            : req.file.mimetype === 'image/webp'
-              ? 'webp'
-              : 'gif';
-
-      const filename =
-        `spectra-vehicles/${randomUUID()}.${extension}`;
-
-      const blob = await put(
-        filename,
-        req.file.buffer,
-        {
-          access: 'public',
-          token: process.env.BLOB_READ_WRITE_TOKEN,
-          contentType: req.file.mimetype,
-          addRandomSuffix: false
-        }
-      );
-
-      res.json({
-        ok: true,
-        url: blob.url,
-        filename
-      });
-
-    } catch (error) {
-      console.error(
-        'BILD-UPLOAD-FEHLER:',
-        error
-      );
-
-      res.status(500).json({
-        error:
-          error.message ||
-          'Bild konnte nicht hochgeladen werden.'
-      });
-    }
-  }
-);
-
 const PORT = Number(process.env.PORT || 3000);
 
 const sql = neon(process.env.DATABASE_URL);
@@ -258,8 +158,7 @@ async function setupDatabase() {
       'No Neon data found. Importing db.json...'
     );
 
-    const initialDB =
-      loadLocalDB();
+    const initialDB = loadLocalDB();
 
     await sql`
       INSERT INTO app_state (id, data)
@@ -348,7 +247,6 @@ app.use(
   async (req, res, next) => {
     try {
       await dbReady;
-
       next();
     } catch (error) {
       console.error(error);
@@ -427,9 +325,7 @@ function audit(
 async function seedUsers() {
   const seeds = [];
 
-  if (
-    process.env.ADMIN_PASSWORD
-  ) {
+  if (process.env.ADMIN_PASSWORD) {
     seeds.push({
       username: 'admin',
       role: 'ADMIN',
@@ -439,9 +335,7 @@ async function seedUsers() {
     });
   }
 
-  if (
-    process.env.PROJEKTLEITUNG_PASSWORD
-  ) {
+  if (process.env.PROJEKTLEITUNG_PASSWORD) {
     seeds.push({
       username:
         'projektleitung',
@@ -449,14 +343,11 @@ async function seedUsers() {
         'PROJEKTLEITUNG',
       organizationId: null,
       password:
-        process.env
-          .PROJEKTLEITUNG_PASSWORD
+        process.env.PROJEKTLEITUNG_PASSWORD
     });
   }
 
-  if (
-    process.env.LEADER_PASSWORD
-  ) {
+  if (process.env.LEADER_PASSWORD) {
     seeds.push({
       username: 'leader',
       role: 'LEADER',
@@ -1946,7 +1837,16 @@ app.use(
       });
     }
 
-    next(error);
+    console.error(
+      'UNHANDLED SERVER ERROR:',
+      error
+    );
+
+    res.status(500).json({
+      error:
+        error?.message ||
+        'Interner Serverfehler'
+    });
   }
 );
 
@@ -1977,3 +1877,19 @@ app.get(
 // =====================================================
 
 module.exports = app;
+
+
+// =====================================================
+// LOCAL SERVER
+// =====================================================
+
+if (require.main === module) {
+  app.listen(
+    PORT,
+    () => {
+      console.log(
+        `Spectra server running on port ${PORT}`
+      );
+    }
+  );
+}
