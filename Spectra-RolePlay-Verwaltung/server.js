@@ -415,7 +415,7 @@ app.post('/api/login', async (req, res) => {
       new Date(s.expiresAt) > new Date()
   );
 
-  audit(db.user, 'LOGIN');
+  audit(user, 'LOGIN');
 
   await saveDB();
 
