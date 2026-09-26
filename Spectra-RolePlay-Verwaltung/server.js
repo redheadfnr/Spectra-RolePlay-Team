@@ -760,104 +760,111 @@ app.post(
 app.patch(
   '/api/requests/:id',
   auth,
-  roles(
-    'ADMIN',
-    'PROJEKTLEITUNG'
-  ),
+  roles('ADMIN', 'PROJEKTLEITUNG'),
   async (req, res) => {
-    const request =
-      db.requests.find(
-        x =>
-          x.id ===
-          req.params.id
+    try {
+      const request = db.requests.find(
+        x => x.id === req.params.id
       );
 
-    if (!request) {
-      return res.status(404).json({
-        error:
-          'Antrag nicht gefunden'
+      if (!request) {
+        return res.status(404).json({
+          error: 'Antrag nicht gefunden'
+        });
+      }
+
+      const { status, comment } = req.body || {};
+
+      const allowed = [
+        'BEANTRAGT',
+        'IN_PRUEFUNG',
+        'GENEHMIGT',
+        'ABGELEHNT'
+      ];
+
+      if (status && !allowed.includes(status)) {
+        return res.status(400).json({
+          error: 'Ungültiger Status'
+        });
+      }
+
+      // ===============================================
+      // ANTRAG GENEHMIGEN
+      // ===============================================
+
+      if (status === 'GENEHMIGT') {
+
+        const alreadyInFleet =
+          db.organizationVehicles.some(
+            x =>
+              x.organizationId === request.organizationId &&
+              x.vehicleId === request.vehicleId
+          );
+
+        if (!alreadyInFleet) {
+          db.organizationVehicles.push({
+            id: randomUUID(),
+            organizationId: request.organizationId,
+            vehicleId: request.vehicleId,
+            requestId: request.id,
+            addedAt: new Date().toISOString()
+          });
+        }
+      }
+
+      // ===============================================
+      // ANTRAG AKTUALISIEREN
+      // ===============================================
+
+      if (status) {
+        request.status = status;
+      }
+
+      if (comment !== undefined) {
+        request.comment = comment;
+      }
+
+      request.reviewerId = req.user.id;
+      request.reviewer = req.user.username;
+      request.reviewedAt = new Date().toISOString();
+
+      audit(
+        req.user,
+        'REQUEST_UPDATED',
+        `${request.id} -> ${request.status}`
+      );
+
+      // ===============================================
+      // ALLES NACH NEON SPEICHERN
+      // ===============================================
+
+      await saveDB();
+
+      res.json({
+        ok: true,
+        request,
+        fleetEntry:
+          status === 'GENEHMIGT'
+            ? db.organizationVehicles.find(
+                x =>
+                  x.organizationId === request.organizationId &&
+                  x.vehicleId === request.vehicleId
+              ) || null
+            : null
+      });
+
+    } catch (error) {
+      console.error(
+        'REQUEST UPDATE ERROR:',
+        error
+      );
+
+      res.status(500).json({
+        error: 'Antrag konnte nicht aktualisiert werden'
       });
     }
-
-    const {
-      status,
-      comment
-    } = req.body || {};
-
-    const allowed = [
-      'BEANTRAGT',
-      'IN_PRUEFUNG',
-      'GENEHMIGT',
-      'ABGELEHNT'
-    ];
-
-    if (
-      status &&
-      !allowed.includes(status)
-    ) {
-      return res.status(400).json({
-        error:
-          'Ungültiger Status'
-      });
-    }
-
-    if (
-      status ===
-        'GENEHMIGT' &&
-      !db.organizationVehicles.some(
-        x =>
-          x.organizationId ===
-            request.organizationId &&
-          x.vehicleId ===
-            request.vehicleId
-      )
-    ) {
-      db.organizationVehicles.push({
-        id: randomUUID(),
-        organizationId:
-          request.organizationId,
-        vehicleId:
-          request.vehicleId,
-        requestId:
-          request.id,
-        addedAt:
-          new Date().toISOString()
-      });
-    }
-
-    if (status) {
-      request.status =
-        status;
-    }
-
-    if (
-      comment !== undefined
-    ) {
-      request.comment =
-        comment;
-    }
-
-    request.reviewerId =
-      req.user.id;
-
-    request.reviewer =
-      req.user.username;
-
-    request.reviewedAt =
-      new Date().toISOString();
-
-    audit(
-      req.user,
-      'REQUEST_UPDATED',
-      `${request.id} -> ${request.status}`
-    );
-
-    await saveDB();
-
-    res.json(request);
   }
 );
-
 
 // =====================================================
 // DELETE REQUEST
